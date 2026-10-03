@@ -133,6 +133,26 @@ budget_manager = BudgetManager(
         runtime_config
         .MAX_ESTIMATED_COST
     ),
+    max_agent_turns=(
+        runtime_config
+        .MAX_AGENT_TURNS
+    ),
+    max_input_tokens=(
+        runtime_config
+        .MAX_INPUT_TOKENS
+    ),
+    max_output_tokens=(
+        runtime_config
+        .MAX_OUTPUT_TOKENS
+    ),
+    max_execution_duration_ms=(
+        runtime_config
+        .MAX_EXECUTION_DURATION_MS
+    ),
+    max_model_runtime_ms=(
+        runtime_config
+        .MAX_MODEL_RUNTIME_MS
+    ),
 )
 
 
@@ -261,6 +281,26 @@ def _apply_runtime_policy(
             budget_manager
             .max_estimated_cost
         ),
+        "max_agent_turns": (
+            budget_manager
+            .max_agent_turns
+        ),
+        "max_input_tokens": (
+            budget_manager
+            .max_input_tokens
+        ),
+        "max_output_tokens": (
+            budget_manager
+            .max_output_tokens
+        ),
+        "max_execution_duration_ms": (
+            budget_manager
+            .max_execution_duration_ms
+        ),
+        "max_model_runtime_ms": (
+            budget_manager
+            .max_model_runtime_ms
+        ),
     }
 
     previous_threshold = (
@@ -287,6 +327,31 @@ def _apply_runtime_policy(
                 policy
                 .budgets
                 .max_estimated_cost_per_session
+            ),
+            max_agent_turns=(
+                policy
+                .budgets
+                .max_agent_turns_per_session
+            ),
+            max_input_tokens=(
+                policy
+                .budgets
+                .max_input_tokens_per_session
+            ),
+            max_output_tokens=(
+                policy
+                .budgets
+                .max_output_tokens_per_session
+            ),
+            max_execution_duration_ms=(
+                policy
+                .budgets
+                .max_execution_duration_ms_per_session
+            ),
+            max_model_runtime_ms=(
+                policy
+                .budgets
+                .max_model_runtime_ms_per_session
             ),
         )
 
@@ -607,6 +672,26 @@ async def reload_policy() -> dict[
                         budget_manager
                         .max_estimated_cost
                     ),
+                    "max_agent_turns_per_session": (
+                        budget_manager
+                        .max_agent_turns
+                    ),
+                    "max_input_tokens_per_session": (
+                        budget_manager
+                        .max_input_tokens
+                    ),
+                    "max_output_tokens_per_session": (
+                        budget_manager
+                        .max_output_tokens
+                    ),
+                    "max_execution_duration_ms_per_session": (
+                        budget_manager
+                        .max_execution_duration_ms
+                    ),
+                    "max_model_runtime_ms_per_session": (
+                        budget_manager
+                        .max_model_runtime_ms
+                    ),
                 },
             }
         )
@@ -698,6 +783,26 @@ async def capabilities() -> dict[
                 "max_estimated_cost_per_session": (
                     budget_manager
                     .max_estimated_cost
+                ),
+                "max_agent_turns_per_session": (
+                    budget_manager
+                    .max_agent_turns
+                ),
+                "max_input_tokens_per_session": (
+                    budget_manager
+                    .max_input_tokens
+                ),
+                "max_output_tokens_per_session": (
+                    budget_manager
+                    .max_output_tokens
+                ),
+                "max_execution_duration_ms_per_session": (
+                    budget_manager
+                    .max_execution_duration_ms
+                ),
+                "max_model_runtime_ms_per_session": (
+                    budget_manager
+                    .max_model_runtime_ms
                 ),
             },
             "action_bound_approval": {
@@ -1187,6 +1292,18 @@ async def telemetry() -> dict[
         .snapshot()
     )
 
+    budget_sessions = {
+        session_id: (
+            budget_manager
+            .usage_vs_limits(
+                session_id
+            )
+        )
+        for session_id
+        in budget_manager
+        .snapshots()
+    }
+
     return jsonable_encoder(
         {
             "status": "ok",
@@ -1196,6 +1313,15 @@ async def telemetry() -> dict[
                 .version
             ),
             "metrics": metrics,
+            "budget_governance": {
+                "limits": (
+                    budget_manager
+                    .limits_snapshot()
+                ),
+                "sessions": (
+                    budget_sessions
+                ),
+            },
             "audit": {
                 "session_count": (
                     len(
