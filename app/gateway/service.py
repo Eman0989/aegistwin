@@ -1,7 +1,10 @@
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
-from app.config import MVP_TOOLS
+from app.config import (
+    ALLOWED_MODELS,
+    MVP_TOOLS,
+)
 from app.contracts import (
     DataArtifact,
     DecisionAction,
@@ -75,7 +78,9 @@ class Gateway:
 
         self.approval_manager = (
             approval_manager
-            or ApprovalManager(self.store)
+            or ApprovalManager(
+                self.store
+            )
         )
 
         self.budget_manager = (
@@ -97,8 +102,13 @@ class Gateway:
             enforce_tool_allow_list
         )
 
-        self.enforce_semantic = enforce_semantic
-        self.enforce_composition = enforce_composition
+        self.enforce_semantic = (
+            enforce_semantic
+        )
+
+        self.enforce_composition = (
+            enforce_composition
+        )
 
         self.enforce_deterministic_policy = (
             enforce_deterministic_policy
@@ -108,14 +118,21 @@ class Gateway:
             enforce_human_approval
         )
 
-        self.enforce_budget = enforce_budget
+        self.enforce_budget = (
+            enforce_budget
+        )
 
-        self.executor = executor or execute_tool
+        self.executor = (
+            executor
+            or execute_tool
+        )
 
     async def process(
         self,
         call: ToolCall,
-        input_artifacts: list[DataArtifact] | None = None,
+        input_artifacts: list[
+            DataArtifact
+        ] | None = None,
         *,
         approval_id: str | None = None,
         estimated_cost: float = 0.0,
@@ -123,15 +140,22 @@ class Gateway:
         PolicyDecision,
         EffectReceipt | None,
     ]:
-        inputs = list(input_artifacts or [])
+        inputs = list(
+            input_artifacts
+            or []
+        )
 
-        execution_inputs = list(inputs)
+        execution_inputs = list(
+            inputs
+        )
 
         redaction_result: (
             RedactionResult | None
         ) = None
 
-        self._ensure_session(call.session_id)
+        self._ensure_session(
+            call.session_id
+        )
 
         # --------------------------------------------------
         # Boundary 1: registered-tool allow-list
@@ -139,13 +163,15 @@ class Gateway:
 
         if (
             self.enforce_tool_allow_list
-            and call.tool_name not in MVP_TOOLS
+            and call.tool_name
+            not in MVP_TOOLS
         ):
             decision = self._new_decision(
                 call,
                 DecisionAction.BLOCK,
                 (
-                    f"Unsupported tool '{call.tool_name}'; "
+                    f"Unsupported tool "
+                    f"'{call.tool_name}'; "
                     "only MVP tools may execute."
                 ),
                 risk_level=RiskLevel.HIGH,
@@ -160,7 +186,36 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 2: single-call semantic analysis
+        # Boundary 2: allowed-model enforcement
+        # --------------------------------------------------
+
+        if (
+            call.model_name is not None
+            and call.model_name
+            not in ALLOWED_MODELS
+        ):
+            decision = self._new_decision(
+                call,
+                DecisionAction.BLOCK,
+                (
+                    "Unapproved model "
+                    f"'{call.model_name}' requested; "
+                    "only policy-approved models "
+                    "may execute."
+                ),
+                risk_level=RiskLevel.HIGH,
+            )
+
+            return (
+                self._record_decision(
+                    decision,
+                    call.session_id,
+                ),
+                None,
+            )
+
+        # --------------------------------------------------
+        # Boundary 3: single-call semantic analysis
         # --------------------------------------------------
 
         if self.enforce_semantic:
@@ -184,7 +239,8 @@ class Gateway:
                         f"{semantic_verdict.engine}."
                     ),
                     risk_level=(
-                        semantic_verdict.risk_level
+                        semantic_verdict
+                        .risk_level
                     ),
                 )
 
@@ -197,18 +253,21 @@ class Gateway:
                 )
 
         # --------------------------------------------------
-        # Boundary 3: session composition analysis
+        # Boundary 4: accumulated-session composition
         # --------------------------------------------------
 
         session_receipts = (
-            self.store.list_receipts_for_session(
+            self.store
+            .list_receipts_for_session(
                 call.session_id
             )
         )
 
         composition_verdict = (
             self.composition_analyzer.analyze(
-                receipts=session_receipts,
+                receipts=(
+                    session_receipts
+                ),
                 proposed_call=call,
                 input_artifacts=inputs,
             )
@@ -236,7 +295,8 @@ class Gateway:
                     f"{' -> '.join(composition_verdict.tool_sequence)}."
                 ),
                 risk_level=(
-                    composition_verdict.risk_level
+                    composition_verdict
+                    .risk_level
                 ),
             )
 
@@ -249,14 +309,15 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 4: deterministic policy evaluation
+        # Boundary 5: deterministic policy evaluation
         # --------------------------------------------------
 
         labels = (
             set().union(
                 *(
                     artifact.labels
-                    for artifact in inputs
+                    for artifact
+                    in inputs
                 )
             )
             if inputs
@@ -265,27 +326,38 @@ class Gateway:
 
         destination = (
             "EXTERNAL"
-            if call.tool_name == "external_http"
+            if (
+                call.tool_name
+                == "external_http"
+            )
             else None
         )
 
-        if self.enforce_deterministic_policy:
-            decision = self.policy_engine.evaluate(
-                call,
-                labels,
-                destination,
+        if (
+            self.enforce_deterministic_policy
+        ):
+            decision = (
+                self.policy_engine.evaluate(
+                    call,
+                    labels,
+                    destination,
+                )
             )
         else:
             decision = self._new_decision(
                 call,
                 DecisionAction.ALLOW,
                 (
-                    "Deterministic policy control is "
-                    "disabled by startup configuration."
+                    "Deterministic policy control "
+                    "is disabled by startup "
+                    "configuration."
                 ),
             )
 
-        if decision.action == DecisionAction.BLOCK:
+        if (
+            decision.action
+            == DecisionAction.BLOCK
+        ):
             return (
                 self._record_decision(
                     decision,
@@ -295,25 +367,36 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 5A: deterministic redaction
+        # Boundary 6A: deterministic redaction
         # --------------------------------------------------
 
-        if decision.action == DecisionAction.REDACT:
-            redaction_result = redact_artifacts(
-                inputs
+        if (
+            decision.action
+            == DecisionAction.REDACT
+        ):
+            redaction_result = (
+                redact_artifacts(
+                    inputs
+                )
             )
 
-            if not redaction_result.changed:
-                blocked = self._new_decision(
-                    call,
-                    DecisionAction.BLOCK,
-                    (
-                        "Policy required redaction, but "
-                        "no redactable sensitive value "
-                        "was identified. Execution stopped "
-                        "safely."
-                    ),
-                    risk_level=RiskLevel.HIGH,
+            if (
+                not redaction_result.changed
+            ):
+                blocked = (
+                    self._new_decision(
+                        call,
+                        DecisionAction.BLOCK,
+                        (
+                            "Policy required redaction, "
+                            "but no redactable sensitive "
+                            "value was identified. "
+                            "Execution stopped safely."
+                        ),
+                        risk_level=(
+                            RiskLevel.HIGH
+                        ),
+                    )
                 )
 
                 return (
@@ -325,24 +408,28 @@ class Gateway:
                 )
 
             execution_inputs = (
-                redaction_result.artifacts
+                redaction_result
+                .artifacts
             )
 
-            decision = self._replace_decision(
-                decision,
-                reason=(
-                    "Policy required redaction; "
-                    f"sanitized "
-                    f"{redaction_result.redacted_value_count} "
-                    "sensitive value(s) across "
-                    f"{redaction_result.changed_artifact_count} "
-                    "artifact(s) before execution. "
-                    f"Policy reason: {decision.reason}"
-                ),
+            decision = (
+                self._replace_decision(
+                    decision,
+                    reason=(
+                        "Policy required redaction; "
+                        f"sanitized "
+                        f"{redaction_result.redacted_value_count} "
+                        "sensitive value(s) across "
+                        f"{redaction_result.changed_artifact_count} "
+                        "artifact(s) before execution. "
+                        "Policy reason: "
+                        f"{decision.reason}"
+                    ),
+                )
             )
 
         # --------------------------------------------------
-        # Boundary 5B: action-bound human approval
+        # Boundary 6B: action-bound human approval
         # --------------------------------------------------
 
         elif (
@@ -351,12 +438,14 @@ class Gateway:
             and self.enforce_human_approval
         ):
             if approval_id is None:
-                required = self._replace_decision(
-                    decision,
-                    reason=(
-                        "Human approval required: "
-                        f"{decision.reason}"
-                    ),
+                required = (
+                    self._replace_decision(
+                        decision,
+                        reason=(
+                            "Human approval required: "
+                            f"{decision.reason}"
+                        ),
+                    )
                 )
 
                 return (
@@ -367,9 +456,11 @@ class Gateway:
                     None,
                 )
 
-            if not self.approval_manager.authorize(
-                approval_id,
-                call,
+            if (
+                not self.approval_manager.authorize(
+                    approval_id,
+                    call,
+                )
             ):
                 blocked = self._new_decision(
                     call,
@@ -390,21 +481,28 @@ class Gateway:
                     None,
                 )
 
-            decision = self._replace_decision(
-                decision,
-                action=DecisionAction.ALLOW,
-                reason=(
-                    "Human approval validated; "
-                    "policy and budget checks passed."
-                ),
+            decision = (
+                self._replace_decision(
+                    decision,
+                    action=(
+                        DecisionAction.ALLOW
+                    ),
+                    reason=(
+                        "Human approval validated; "
+                        "policy and budget checks passed."
+                    ),
+                )
             )
 
-        elif decision.action != DecisionAction.ALLOW:
+        elif (
+            decision.action
+            != DecisionAction.ALLOW
+        ):
             blocked = self._new_decision(
                 call,
                 DecisionAction.BLOCK,
                 (
-                    f"Policy action "
+                    "Policy action "
                     f"{decision.action.value} "
                     "cannot execute in this gateway."
                 ),
@@ -420,7 +518,7 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 6: budget and resource controls
+        # Boundary 7: budget and resource controls
         # --------------------------------------------------
 
         if self.enforce_budget:
@@ -432,7 +530,9 @@ class Gateway:
                 )
             )
 
-            if not budget_result.allowed:
+            if (
+                not budget_result.allowed
+            ):
                 blocked = self._new_decision(
                     call,
                     DecisionAction.BLOCK,
@@ -457,9 +557,11 @@ class Gateway:
             call.session_id,
         )
 
-        receipt = await self.executor(
-            call,
-            execution_inputs,
+        receipt = (
+            await self.executor(
+                call,
+                execution_inputs,
+            )
         )
 
         if (
@@ -470,7 +572,9 @@ class Gateway:
                 ObservedEffect(
                     effect_type="REDACTION",
                     resource=call.tool_name,
-                    data_labels={"REDACTED"},
+                    data_labels={
+                        "REDACTED"
+                    },
                     metadata={
                         "redacted_value_count": (
                             redaction_result
@@ -492,9 +596,14 @@ class Gateway:
                 )
             )
 
-        self.store.save_receipt(receipt)
+        self.store.save_receipt(
+            receipt
+        )
 
-        return decision, receipt
+        return (
+            decision,
+            receipt,
+        )
 
     def _ensure_session(
         self,
@@ -515,13 +624,17 @@ class Gateway:
         session_id: str,
         analysis: dict,
     ) -> None:
-        session = self.store.get_session(
-            session_id
+        session = (
+            self.store.get_session(
+                session_id
+            )
         )
 
         if session is None:
-            session = self.store.create_session(
-                session_id
+            session = (
+                self.store.create_session(
+                    session_id
+                )
             )
 
         analyses = session.setdefault(
@@ -529,7 +642,9 @@ class Gateway:
             [],
         )
 
-        analyses.append(analysis)
+        analyses.append(
+            analysis
+        )
 
     def _record_decision(
         self,
@@ -569,15 +684,22 @@ class Gateway:
         action: DecisionAction | None = None,
     ) -> PolicyDecision:
         return PolicyDecision(
-            decision_id=decision.decision_id,
-            call_id=decision.call_id,
+            decision_id=(
+                decision.decision_id
+            ),
+            call_id=(
+                decision.call_id
+            ),
             action=(
                 action
                 or decision.action
             ),
             reason=reason,
             matched_guardrail_id=(
-                decision.matched_guardrail_id
+                decision
+                .matched_guardrail_id
             ),
-            risk_level=decision.risk_level,
+            risk_level=(
+                decision.risk_level
+            ),
         )
