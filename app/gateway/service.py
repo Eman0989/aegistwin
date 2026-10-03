@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
+import app.config as runtime_config
 from app.config import (
     ALLOWED_MODELS,
     MVP_TOOLS,
@@ -20,6 +21,9 @@ from app.controls.policy import PolicyEngine
 from app.gateway.executor import execute_tool
 from app.security.composition import (
     SessionCompositionAnalyzer,
+)
+from app.security.historical import (
+    HistoricalAttackDetector,
 )
 from app.security.redaction import (
     RedactionResult,
@@ -48,6 +52,7 @@ class Gateway:
         budget_manager: BudgetManager | None = None,
         semantic_detector: SemanticDetector | None = None,
         composition_analyzer: SessionCompositionAnalyzer | None = None,
+        historical_detector: HistoricalAttackDetector | None = None,
         enforce_tool_allow_list: bool = True,
         enforce_semantic: bool = True,
         enforce_composition: bool = False,
@@ -96,6 +101,11 @@ class Gateway:
         self.composition_analyzer = (
             composition_analyzer
             or SessionCompositionAnalyzer()
+        )
+
+        self.historical_detector = (
+            historical_detector
+            or HistoricalAttackDetector()
         )
 
         self.enforce_tool_allow_list = (
@@ -215,7 +225,50 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 3: single-call semantic analysis
+        # Boundary 3: historical attack intelligence
+        # --------------------------------------------------
+
+        if (
+            runtime_config
+            .ACTIVE_POLICY
+            .controls
+            .historical_attack_detection
+        ):
+            historical_verdict = (
+                self.historical_detector
+                .analyze(
+                    call
+                )
+            )
+
+            if historical_verdict.matched:
+                decision = (
+                    self._new_decision(
+                        call,
+                        DecisionAction.BLOCK,
+                        (
+                            "Historical attack control "
+                            "blocked known exploit "
+                            f"'{historical_verdict.signature_id}': "
+                            f"{historical_verdict.reason}"
+                        ),
+                        risk_level=(
+                            historical_verdict
+                            .risk_level
+                        ),
+                    )
+                )
+
+                return (
+                    self._record_decision(
+                        decision,
+                        call.session_id,
+                    ),
+                    None,
+                )
+
+        # --------------------------------------------------
+        # Boundary 4: single-call semantic analysis
         # --------------------------------------------------
 
         if self.enforce_semantic:
@@ -253,7 +306,7 @@ class Gateway:
                 )
 
         # --------------------------------------------------
-        # Boundary 4: accumulated-session composition
+        # Boundary 5: accumulated-session composition
         # --------------------------------------------------
 
         session_receipts = (
@@ -309,7 +362,7 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 5: deterministic policy evaluation
+        # Boundary 6: deterministic policy evaluation
         # --------------------------------------------------
 
         labels = (
@@ -367,7 +420,7 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 6A: deterministic redaction
+        # Boundary 7A: deterministic redaction
         # --------------------------------------------------
 
         if (
@@ -429,7 +482,7 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 6B: action-bound human approval
+        # Boundary 7B: action-bound human approval
         # --------------------------------------------------
 
         elif (
@@ -518,7 +571,7 @@ class Gateway:
             )
 
         # --------------------------------------------------
-        # Boundary 7: budget and resource controls
+        # Boundary 8: budget and resource controls
         # --------------------------------------------------
 
         if self.enforce_budget:
