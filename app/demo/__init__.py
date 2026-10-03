@@ -1,0 +1,1 @@
+"""Canonical synthetic demo scenario."""
