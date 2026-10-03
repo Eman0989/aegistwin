@@ -6,6 +6,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.config import (
+    ACTIVE_POLICY,
+    MAX_ESTIMATED_COST,
+    MAX_EXTERNAL_HTTP_CALLS,
+    MAX_TOOL_CALLS,
+    SEMANTIC_THRESHOLD,
+)
 from app.contracts import (
     DataArtifact,
     ToolCall,
@@ -25,6 +32,9 @@ from app.security.benchmark_suite import (
 )
 from app.security.replay import (
     run_attack_repair_replay,
+)
+from app.security.semantic import (
+    HybridSemanticDetector,
 )
 from app.store import InMemoryStore
 from app.twin.api_analysis import (
@@ -65,14 +75,27 @@ app.add_middleware(
 
 store = InMemoryStore()
 approval_manager = ApprovalManager(store)
-budget_manager = BudgetManager()
+
+budget_manager = BudgetManager(
+    max_tool_calls=MAX_TOOL_CALLS,
+    max_external_http_calls=(
+        MAX_EXTERNAL_HTTP_CALLS
+    ),
+    max_estimated_cost=MAX_ESTIMATED_COST,
+)
+
 runtime_policy_engine = PolicyEngine()
+
+semantic_detector = HybridSemanticDetector(
+    threshold=SEMANTIC_THRESHOLD,
+)
 
 production_gateway = Gateway(
     runtime_policy_engine,
     store=store,
     approval_manager=approval_manager,
     budget_manager=budget_manager,
+    semantic_detector=semantic_detector,
     enforce_composition=True,
 )
 
@@ -87,6 +110,7 @@ def _replay_gateway_factory(
         store=store,
         approval_manager=approval_manager,
         budget_manager=budget_manager,
+        semantic_detector=semantic_detector,
         enforce_composition=False,
     )
 
@@ -101,39 +125,103 @@ async def health() -> dict[str, str]:
     }
 
 
+@app.get("/policy")
+async def get_policy() -> dict[str, Any]:
+    """Expose the validated startup policy to the dashboard."""
+
+    return jsonable_encoder(
+        {
+            "status": "validated",
+            "source": "policies/aegis.yaml",
+            "policy": ACTIVE_POLICY,
+            "enforcement": {
+                "organization_ceilings": (
+                    "non_overridable"
+                ),
+                "validation": (
+                    "pydantic-and-hard-coded-ceilings"
+                ),
+                "load_time": "application_startup",
+            },
+            "reload_mode": "startup",
+            "hot_reload": False,
+        }
+    )
+
+
 @app.get("/capabilities")
 async def capabilities() -> dict[str, Any]:
     return {
         "architecture": "hybrid-control-layer",
         "gateway_mode": "proxy",
         "composition_enforcement": True,
+        "policy_source": "policies/aegis.yaml",
+        "policy_version": ACTIVE_POLICY.version,
         "controls": {
             "tool_allow_list": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .tool_allow_list
+                ),
                 "type": "deterministic",
             },
             "semantic_injection_detection": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .semantic_detection
+                ),
                 "type": "semantic",
+                "threshold": SEMANTIC_THRESHOLD,
             },
             "session_composition_analysis": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .composition_analysis
+                ),
                 "type": "hybrid",
             },
             "deterministic_policy": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .deterministic_policy
+                ),
                 "type": "deterministic",
             },
             "data_lineage": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .data_lineage
+                ),
                 "type": "deterministic",
             },
             "budget_enforcement": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .budget_enforcement
+                ),
                 "type": "deterministic",
+                "max_tool_calls_per_session": (
+                    MAX_TOOL_CALLS
+                ),
+                "max_external_http_calls_per_session": (
+                    MAX_EXTERNAL_HTTP_CALLS
+                ),
+                "max_estimated_cost_per_session": (
+                    MAX_ESTIMATED_COST
+                ),
             },
             "action_bound_approval": {
-                "enabled": True,
+                "enabled": (
+                    ACTIVE_POLICY
+                    .controls
+                    .human_approval
+                ),
                 "type": "deterministic",
             },
         },
@@ -185,6 +273,7 @@ async def evaluate_gateway(
             "receipt": receipt,
             "session": snapshot,
             "composition_analysis": latest_composition,
+            "policy_version": ACTIVE_POLICY.version,
             "control_path": [
                 "tool_allow_list",
                 "semantic_detection",
@@ -204,9 +293,12 @@ async def extended_benchmark() -> dict[str, Any]:
 
     report = await run_extended_benchmark()
 
-    return jsonable_encoder(
-        report.as_dict()
+    response = report.as_dict()
+    response["policy_version"] = (
+        ACTIVE_POLICY.version
     )
+
+    return jsonable_encoder(response)
 
 
 @app.get("/runtime/sessions/{session_id}")
@@ -240,6 +332,7 @@ async def get_runtime_session(
                     session_id
                 )
             ),
+            "policy_version": ACTIVE_POLICY.version,
         }
     )
 
@@ -294,10 +387,12 @@ async def attack_my_agent() -> dict[str, Any]:
             "utility_after": after_metrics.utility,
             "false_positive_rate": {
                 "before": (
-                    before_metrics.false_positive_rate
+                    before_metrics
+                    .false_positive_rate
                 ),
                 "after": (
-                    after_metrics.false_positive_rate
+                    after_metrics
+                    .false_positive_rate
                 ),
             },
             "friction": {
@@ -322,6 +417,7 @@ async def attack_my_agent() -> dict[str, Any]:
                 report.regression_suite_passed
             ),
             "twin_analysis": twin_analysis,
+            "policy_version": ACTIVE_POLICY.version,
         }
     )
 
