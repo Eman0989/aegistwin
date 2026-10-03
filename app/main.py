@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.contracts import (
@@ -26,6 +27,9 @@ from app.security.replay import (
     run_attack_repair_replay,
 )
 from app.store import InMemoryStore
+from app.twin.api_analysis import (
+    build_twin_analysis,
+)
 
 
 class GatewayEvaluationRequest(BaseModel):
@@ -44,6 +48,19 @@ app = FastAPI(
         "Hybrid deterministic and semantic control layer "
         "for agentic AI systems."
     ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 store = InMemoryStore()
@@ -167,9 +184,7 @@ async def evaluate_gateway(
             "executed": receipt is not None,
             "receipt": receipt,
             "session": snapshot,
-            "composition_analysis": (
-                latest_composition
-            ),
+            "composition_analysis": latest_composition,
             "control_path": [
                 "tool_allow_list",
                 "semantic_detection",
@@ -247,6 +262,13 @@ async def attack_my_agent() -> dict[str, Any]:
     before_metrics = report.before_metrics
     after_metrics = report.after_metrics
 
+    twin_analysis = build_twin_analysis(
+        receipts=replay["before"].receipts,
+        legitimate_receipts=(
+            replay["legitimate_after"].receipts
+        ),
+    )
+
     response = dict(replay)
 
     response.update(
@@ -299,6 +321,7 @@ async def attack_my_agent() -> dict[str, Any]:
             "regression_passed": (
                 report.regression_suite_passed
             ),
+            "twin_analysis": twin_analysis,
         }
     )
 
