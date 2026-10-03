@@ -96,7 +96,24 @@ production_gateway = Gateway(
     approval_manager=approval_manager,
     budget_manager=budget_manager,
     semantic_detector=semantic_detector,
-    enforce_composition=True,
+    enforce_tool_allow_list=(
+        ACTIVE_POLICY.controls.tool_allow_list
+    ),
+    enforce_semantic=(
+        ACTIVE_POLICY.controls.semantic_detection
+    ),
+    enforce_composition=(
+        ACTIVE_POLICY.controls.composition_analysis
+    ),
+    enforce_deterministic_policy=(
+        ACTIVE_POLICY.controls.deterministic_policy
+    ),
+    enforce_human_approval=(
+        ACTIVE_POLICY.controls.human_approval
+    ),
+    enforce_budget=(
+        ACTIVE_POLICY.controls.budget_enforcement
+    ),
 )
 
 
@@ -111,7 +128,22 @@ def _replay_gateway_factory(
         approval_manager=approval_manager,
         budget_manager=budget_manager,
         semantic_detector=semantic_detector,
+        enforce_tool_allow_list=(
+            ACTIVE_POLICY.controls.tool_allow_list
+        ),
+        enforce_semantic=(
+            ACTIVE_POLICY.controls.semantic_detection
+        ),
         enforce_composition=False,
+        enforce_deterministic_policy=(
+            ACTIVE_POLICY.controls.deterministic_policy
+        ),
+        enforce_human_approval=(
+            ACTIVE_POLICY.controls.human_approval
+        ),
+        enforce_budget=(
+            ACTIVE_POLICY.controls.budget_enforcement
+        ),
     )
 
 

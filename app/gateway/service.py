@@ -39,7 +39,12 @@ class Gateway:
         budget_manager: BudgetManager | None = None,
         semantic_detector: SemanticDetector | None = None,
         composition_analyzer: SessionCompositionAnalyzer | None = None,
+        enforce_tool_allow_list: bool = True,
+        enforce_semantic: bool = True,
         enforce_composition: bool = False,
+        enforce_deterministic_policy: bool = True,
+        enforce_human_approval: bool = True,
+        enforce_budget: bool = True,
         executor: Executor | None = None,
     ) -> None:
         self.policy_engine = policy_engine
@@ -82,7 +87,18 @@ class Gateway:
             or SessionCompositionAnalyzer()
         )
 
+        self.enforce_tool_allow_list = (
+            enforce_tool_allow_list
+        )
+        self.enforce_semantic = enforce_semantic
         self.enforce_composition = enforce_composition
+        self.enforce_deterministic_policy = (
+            enforce_deterministic_policy
+        )
+        self.enforce_human_approval = (
+            enforce_human_approval
+        )
+        self.enforce_budget = enforce_budget
         self.executor = executor or execute_tool
 
     async def process(
@@ -98,7 +114,10 @@ class Gateway:
         self._ensure_session(call.session_id)
 
         # Boundary 1: registered-tool allow-list.
-        if call.tool_name not in MVP_TOOLS:
+        if (
+            self.enforce_tool_allow_list
+            and call.tool_name not in MVP_TOOLS
+        ):
             decision = self._new_decision(
                 call,
                 DecisionAction.BLOCK,
@@ -118,31 +137,38 @@ class Gateway:
             )
 
         # Boundary 2: single-call semantic analysis.
-        semantic_verdict = self.semantic_detector.analyze(
-            call
-        )
-
-        if semantic_verdict.malicious:
-            decision = self._new_decision(
-                call,
-                DecisionAction.BLOCK,
-                (
-                    f"Semantic control blocked "
-                    f"{semantic_verdict.category}: "
-                    f"{semantic_verdict.reason} "
-                    f"Confidence={semantic_verdict.score:.2f}; "
-                    f"engine={semantic_verdict.engine}."
-                ),
-                risk_level=semantic_verdict.risk_level,
+        if self.enforce_semantic:
+            semantic_verdict = (
+                self.semantic_detector.analyze(
+                    call
+                )
             )
 
-            return (
-                self._record_decision(
-                    decision,
-                    call.session_id,
-                ),
-                None,
-            )
+            if semantic_verdict.malicious:
+                decision = self._new_decision(
+                    call,
+                    DecisionAction.BLOCK,
+                    (
+                        f"Semantic control blocked "
+                        f"{semantic_verdict.category}: "
+                        f"{semantic_verdict.reason} "
+                        f"Confidence="
+                        f"{semantic_verdict.score:.2f}; "
+                        f"engine="
+                        f"{semantic_verdict.engine}."
+                    ),
+                    risk_level=(
+                        semantic_verdict.risk_level
+                    ),
+                )
+
+                return (
+                    self._record_decision(
+                        decision,
+                        call.session_id,
+                    ),
+                    None,
+                )
 
         # Boundary 3: accumulated-session composition analysis.
         session_receipts = (
@@ -207,11 +233,21 @@ class Gateway:
             else None
         )
 
-        decision = self.policy_engine.evaluate(
-            call,
-            labels,
-            destination,
-        )
+        if self.enforce_deterministic_policy:
+            decision = self.policy_engine.evaluate(
+                call,
+                labels,
+                destination,
+            )
+        else:
+            decision = self._new_decision(
+                call,
+                DecisionAction.ALLOW,
+                (
+                    "Deterministic policy control is "
+                    "disabled by startup configuration."
+                ),
+            )
 
         if decision.action == DecisionAction.BLOCK:
             return (
@@ -223,7 +259,11 @@ class Gateway:
             )
 
         # Boundary 5: action-bound human approval.
-        if decision.action == DecisionAction.REQUIRE_APPROVAL:
+        if (
+            decision.action
+            == DecisionAction.REQUIRE_APPROVAL
+            and self.enforce_human_approval
+        ):
             if approval_id is None:
                 required = self._replace_decision(
                     decision,
@@ -292,27 +332,30 @@ class Gateway:
             )
 
         # Boundary 6: budget and resource controls.
-        budget_result = self.budget_manager.consume(
-            call.session_id,
-            call.tool_name,
-            estimated_cost,
-        )
-
-        if not budget_result.allowed:
-            blocked = self._new_decision(
-                call,
-                DecisionAction.BLOCK,
-                budget_result.reason,
-                risk_level=RiskLevel.HIGH,
-            )
-
-            return (
-                self._record_decision(
-                    blocked,
+        if self.enforce_budget:
+            budget_result = (
+                self.budget_manager.consume(
                     call.session_id,
-                ),
-                None,
+                    call.tool_name,
+                    estimated_cost,
+                )
             )
+
+            if not budget_result.allowed:
+                blocked = self._new_decision(
+                    call,
+                    DecisionAction.BLOCK,
+                    budget_result.reason,
+                    risk_level=RiskLevel.HIGH,
+                )
+
+                return (
+                    self._record_decision(
+                        blocked,
+                        call.session_id,
+                    ),
+                    None,
+                )
 
         # Execution occurs only after all controls pass.
         self._record_decision(
