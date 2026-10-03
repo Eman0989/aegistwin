@@ -47,12 +47,14 @@ def test_capabilities_reports_policy_source() -> None:
     )
 
 
-def test_policy_endpoint_does_not_claim_hot_reload() -> None:
+def test_policy_endpoint_reports_hot_reload() -> None:
     response = client.get("/policy")
 
     assert response.status_code == 200
 
     body = response.json()
 
-    assert body["reload_mode"] == "startup"
-    assert body["hot_reload"] is False
+    assert body["reload_mode"] == "hot"
+    assert body["hot_reload"] is True
+    assert "reload_count" in body
+    assert "last_reloaded_at" in body
