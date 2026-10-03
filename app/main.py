@@ -19,6 +19,9 @@ from app.gateway.service import Gateway
 from app.security.benchmark import (
     build_benchmark_report,
 )
+from app.security.benchmark_suite import (
+    run_extended_benchmark,
+)
 from app.security.replay import (
     run_attack_repair_replay,
 )
@@ -177,6 +180,17 @@ async def evaluate_gateway(
                 "execution",
             ],
         }
+    )
+
+
+@app.post("/benchmark/extended")
+async def extended_benchmark() -> dict[str, Any]:
+    """Run the complete positive and negative benchmark suite."""
+
+    report = await run_extended_benchmark()
+
+    return jsonable_encoder(
+        report.as_dict()
     )
 
 
