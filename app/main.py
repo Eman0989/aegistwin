@@ -27,6 +27,10 @@ from app.controls.approvals import (
 from app.controls.budget import BudgetManager
 from app.controls.policy import PolicyEngine
 from app.gateway.service import Gateway
+from app.persistence.sqlite_store import (
+    DEFAULT_SQLITE_PATH,
+    SQLiteEvidenceStore,
+)
 from app.policy_config import (
     DEFAULT_POLICY_PATH,
     AegisPolicyConfig,
@@ -44,7 +48,6 @@ from app.security.replay import (
 from app.security.semantic import (
     HybridSemanticDetector,
 )
-from app.store import InMemoryStore
 from app.telemetry import RuntimeTelemetry
 from app.twin.api_analysis import (
     build_twin_analysis,
@@ -103,7 +106,9 @@ _last_policy_reload_at: (
 ) = None
 
 
-store = InMemoryStore()
+store = SQLiteEvidenceStore(
+    DEFAULT_SQLITE_PATH
+)
 
 runtime_telemetry = (
     RuntimeTelemetry()
@@ -441,8 +446,6 @@ async def get_policy() -> dict[
     str,
     Any,
 ]:
-    """Expose the currently active validated policy."""
-
     policy = (
         runtime_config.ACTIVE_POLICY
     )
@@ -450,7 +453,9 @@ async def get_policy() -> dict[
     return jsonable_encoder(
         {
             "status": "validated",
-            "source": PUBLIC_POLICY_SOURCE,
+            "source": (
+                PUBLIC_POLICY_SOURCE
+            ),
             "policy": policy,
             "enforcement": {
                 "organization_ceilings": (
@@ -480,8 +485,6 @@ async def reload_policy() -> dict[
     str,
     Any,
 ]:
-    """Validate and atomically apply the central policy."""
-
     global _policy_reload_count
     global _last_policy_reload_at
 
@@ -545,7 +548,9 @@ async def reload_policy() -> dict[
         return jsonable_encoder(
             {
                 "status": "reloaded",
-                "source": PUBLIC_POLICY_SOURCE,
+                "source": (
+                    PUBLIC_POLICY_SOURCE
+                ),
                 "previous_version": (
                     previous_policy.version
                 ),
@@ -625,10 +630,16 @@ async def capabilities() -> dict[
             production_gateway
             .enforce_composition
         ),
-        "policy_source": PUBLIC_POLICY_SOURCE,
+        "policy_source": (
+            PUBLIC_POLICY_SOURCE
+        ),
         "policy_version": (
             policy.version
         ),
+        "persistence": {
+            "enabled": True,
+            "backend": "sqlite",
+        },
         "controls": {
             "tool_allow_list": {
                 "enabled": (
@@ -709,10 +720,13 @@ async def capabilities() -> dict[
 @app.post("/gateway/evaluate")
 async def evaluate_gateway(
     request: GatewayEvaluationRequest,
-) -> dict[str, Any]:
-    """Evaluate and optionally execute one tool call."""
-
-    started = perf_counter()
+) -> dict[
+    str,
+    Any,
+]:
+    started = (
+        perf_counter()
+    )
 
     decision, receipt = (
         await production_gateway.process(
@@ -728,7 +742,8 @@ async def evaluate_gateway(
     )
 
     latency_ms = (
-        perf_counter() - started
+        perf_counter()
+        - started
     ) * 1000.0
 
     executed = (
@@ -760,8 +775,12 @@ async def evaluate_gateway(
             .value
         ),
         control=infer_control(
-            reason=decision.reason,
-            action=decision.action,
+            reason=(
+                decision.reason
+            ),
+            action=(
+                decision.action
+            ),
             executed=executed,
         ),
         action=decision.action,
@@ -842,8 +861,6 @@ async def extended_benchmark() -> dict[
     str,
     Any,
 ]:
-    """Run the complete positive and negative benchmark suite."""
-
     report = (
         await run_extended_benchmark()
     )
@@ -852,7 +869,9 @@ async def extended_benchmark() -> dict[
         report.as_dict()
     )
 
-    response["policy_version"] = (
+    response[
+        "policy_version"
+    ] = (
         runtime_config
         .ACTIVE_POLICY
         .version
@@ -868,7 +887,10 @@ async def extended_benchmark() -> dict[
 )
 async def get_runtime_session(
     session_id: str,
-) -> dict[str, Any]:
+) -> dict[
+    str,
+    Any,
+]:
     session = (
         store.get_session(
             session_id
@@ -878,7 +900,9 @@ async def get_runtime_session(
     if session is None:
         raise HTTPException(
             status_code=404,
-            detail="Session not found.",
+            detail=(
+                "Session not found."
+            ),
         )
 
     snapshot = (
@@ -913,6 +937,21 @@ async def get_runtime_session(
                 .ACTIVE_POLICY
                 .version
             ),
+        }
+    )
+
+
+@app.get("/persistence/status")
+async def persistence_status() -> dict[
+    str,
+    Any,
+]:
+    """Expose durable evidence persistence status."""
+
+    return jsonable_encoder(
+        {
+            "status": "ok",
+            **store.persistence_status(),
         }
     )
 
@@ -1072,8 +1111,6 @@ async def audit_events() -> dict[
     str,
     Any,
 ]:
-    """Return process-local gateway audit events."""
-
     events = (
         audit_log
         .list_event_dicts()
@@ -1099,8 +1136,6 @@ async def audit_events() -> dict[
 async def audit_export(
     format: str = "json",
 ) -> Any:
-    """Export gateway audit evidence as JSON or CSV."""
-
     normalized_format = (
         format
         .strip()
@@ -1147,8 +1182,6 @@ async def telemetry() -> dict[
     str,
     Any,
 ]:
-    """Expose management and security telemetry."""
-
     metrics = (
         runtime_telemetry
         .snapshot()
@@ -1164,17 +1197,25 @@ async def telemetry() -> dict[
             ),
             "metrics": metrics,
             "audit": {
-                "session_count": len(
-                    store.sessions
+                "session_count": (
+                    len(
+                        store.sessions
+                    )
                 ),
-                "receipt_count": len(
-                    store.receipts
+                "receipt_count": (
+                    len(
+                        store.receipts
+                    )
                 ),
-                "decision_count": len(
-                    store.decisions
+                "decision_count": (
+                    len(
+                        store.decisions
+                    )
                 ),
-                "guardrail_count": len(
-                    store.guardrails
+                "guardrail_count": (
+                    len(
+                        store.guardrails
+                    )
                 ),
                 "pending_approvals": sum(
                     getattr(
@@ -1186,8 +1227,11 @@ async def telemetry() -> dict[
                     for approval
                     in store.approvals.values()
                 ),
-                "audit_event_count": len(
-                    audit_log.list_events()
+                "audit_event_count": (
+                    len(
+                        audit_log
+                        .list_events()
+                    )
                 ),
             },
             "controls": {
@@ -1224,6 +1268,9 @@ async def telemetry() -> dict[
                     _last_policy_reload_at
                 ),
             },
+            "persistence": (
+                store.persistence_status()
+            ),
         }
     )
 
