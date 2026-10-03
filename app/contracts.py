@@ -40,35 +40,97 @@ class ToolCall(BaseModel):
     call_id: str
     session_id: str
     tool_name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+
+    arguments: dict[
+        str,
+        Any,
+    ] = Field(
+        default_factory=dict
+    )
+
     instruction_origin: InstructionOrigin
     original_user_intent: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_name: str | None = Field(
+        default=None,
+        min_length=1,
+    )
+
+    timestamp: datetime = Field(
+        default_factory=lambda: (
+            datetime.now(
+                timezone.utc
+            )
+        )
+    )
 
 
 class ObservedEffect(BaseModel):
     effect_type: str
     resource: str | None = None
     destination: str | None = None
-    data_labels: set[str] = Field(default_factory=set)
-    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    data_labels: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
+    metadata: dict[
+        str,
+        Any,
+    ] = Field(
+        default_factory=dict
+    )
 
 
 class DataArtifact(BaseModel):
     artifact_id: str
     value: Any
-    labels: set[str] = Field(default_factory=set)
-    parent_artifact_ids: list[str] = Field(default_factory=list)
+
+    labels: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
+    parent_artifact_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
     transformation: str | None = None
 
 
 class EffectReceipt(BaseModel):
     receipt_id: str
     call: ToolCall
-    declared_effects: list[str] = Field(default_factory=list)
-    observed_effects: list[ObservedEffect] = Field(default_factory=list)
-    input_artifact_ids: list[str] = Field(default_factory=list)
-    output_artifacts: list[DataArtifact] = Field(default_factory=list)
+
+    declared_effects: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    observed_effects: list[
+        ObservedEffect
+    ] = Field(
+        default_factory=list
+    )
+
+    input_artifact_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    output_artifacts: list[
+        DataArtifact
+    ] = Field(
+        default_factory=list
+    )
+
     tool_version: str = "1.0.0"
     tool_fingerprint: str | None = None
     succeeded: bool
@@ -78,10 +140,29 @@ class EffectReceipt(BaseModel):
 class ToolProfile(BaseModel):
     tool_name: str
     version: str
-    declared_effects: set[str] = Field(default_factory=set)
-    observed_effects: set[str] = Field(default_factory=set)
-    capabilities: set[str] = Field(default_factory=set)
-    risk_level: RiskLevel = RiskLevel.LOW
+
+    declared_effects: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
+    observed_effects: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
+    capabilities: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
+    risk_level: RiskLevel = (
+        RiskLevel.LOW
+    )
+
     behavioral_mismatch: bool = False
     fingerprint: str | None = None
 
@@ -92,18 +173,33 @@ class AttackPath(BaseModel):
     instruction_origin: InstructionOrigin
     path: list[str]
     final_effect: str
-    source_labels: set[str] = Field(default_factory=set)
+
+    source_labels: set[
+        str
+    ] = Field(
+        default_factory=set
+    )
+
     destination: str | None = None
     risk_level: RiskLevel
     reproducible: bool = True
-    evidence_receipt_ids: list[str] = Field(default_factory=list)
+
+    evidence_receipt_ids: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
 
 
 class Guardrail(BaseModel):
     guardrail_id: str
     source_labels: set[str]
     destination: str
-    action: DecisionAction = DecisionAction.BLOCK
+
+    action: DecisionAction = (
+        DecisionAction.BLOCK
+    )
+
     generated_from_attack: str
     reason: str
     enabled: bool = True
@@ -115,19 +211,38 @@ class PolicyDecision(BaseModel):
     action: DecisionAction
     reason: str
     matched_guardrail_id: str | None = None
-    risk_level: RiskLevel = RiskLevel.LOW
+
+    risk_level: RiskLevel = (
+        RiskLevel.LOW
+    )
 
 
 class TwinGraph(BaseModel):
-    nodes: list[dict[str, Any]]
-    edges: list[dict[str, Any]]
+    nodes: list[
+        dict[str, Any]
+    ]
+
+    edges: list[
+        dict[str, Any]
+    ]
 
 
 class WorkflowResult(BaseModel):
     workflow_name: str
     success: bool
     blocked: bool = False
-    receipts: list[EffectReceipt] = Field(default_factory=list)
-    decisions: list[PolicyDecision] = Field(default_factory=list)
+
+    receipts: list[
+        EffectReceipt
+    ] = Field(
+        default_factory=list
+    )
+
+    decisions: list[
+        PolicyDecision
+    ] = Field(
+        default_factory=list
+    )
+
     attack_path: AttackPath | None = None
     message: str

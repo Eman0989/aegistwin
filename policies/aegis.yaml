@@ -20,6 +20,7 @@ tools:
 models:
   allowed:
     - protectai/deberta-v3-base-prompt-injection-v2
+    - llama3.2:3b
   semantic_threshold: 0.80
 
 data:
