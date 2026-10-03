@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
-from app.contracts import RiskLevel, ToolCall
+from app.contracts import InstructionOrigin, RiskLevel, ToolCall
 
 
 JAILBREAK_PATTERNS = (
@@ -297,7 +297,7 @@ class TransformersPromptInjectionDetector:
 
 
 class HybridSemanticDetector:
-    """Prefer the AI model and fail safely to detection rules."""
+    """Combine provenance-aware rules with AI classification."""
 
     def __init__(
         self,
@@ -321,8 +321,31 @@ class HybridSemanticDetector:
         self,
         call: ToolCall,
     ) -> SemanticVerdict:
+        fallback_verdict = (
+            self.fallback.analyze(call)
+        )
+
+        # Explicit injection and jailbreak patterns
+        # remain blocked for every provenance.
+        if fallback_verdict.malicious:
+            return fallback_verdict
+
+        trusted_origins = {
+            InstructionOrigin.USER,
+            InstructionOrigin.SYSTEM,
+            InstructionOrigin.TRUSTED_INTERNAL,
+        }
+
+        # Trusted instructions are authorization
+        # sources. The deterministic checks above
+        # still block explicit malicious language,
+        # while avoiding classifier false positives
+        # on normal authorized commands.
+        if call.instruction_origin in trusted_origins:
+            return fallback_verdict
+
         if not self.enable_model:
-            return self.fallback.analyze(call)
+            return fallback_verdict
 
         try:
             return self.model.analyze(call)
@@ -333,4 +356,4 @@ class HybridSemanticDetector:
             RuntimeError,
             ValueError,
         ):
-            return self.fallback.analyze(call)
+            return fallback_verdict
