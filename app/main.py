@@ -2,11 +2,12 @@ from dataclasses import asdict
 from time import perf_counter
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.audit import AuditLog, infer_control
 from app.config import (
     ACTIVE_POLICY,
     MAX_ESTIMATED_COST,
@@ -62,6 +63,7 @@ app = FastAPI(
     ),
 )
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -75,8 +77,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 store = InMemoryStore()
 runtime_telemetry = RuntimeTelemetry()
+audit_log = AuditLog()
 approval_manager = ApprovalManager(store)
 
 budget_manager = BudgetManager(
@@ -288,10 +292,39 @@ async def evaluate_gateway(
         perf_counter() - started
     ) * 1000.0
 
+    executed = receipt is not None
+
     runtime_telemetry.record(
         action=decision.action,
-        executed=receipt is not None,
+        executed=executed,
         latency_ms=latency_ms,
+    )
+
+    audit_log.record(
+        timestamp=request.call.timestamp,
+        session_id=request.call.session_id,
+        call_id=request.call.call_id,
+        tool_name=request.call.tool_name,
+        instruction_origin=(
+            request.call.instruction_origin.value
+        ),
+        control=infer_control(
+            reason=decision.reason,
+            action=decision.action,
+            executed=executed,
+        ),
+        action=decision.action,
+        reason=decision.reason,
+        risk=decision.risk_level,
+        latency_ms=latency_ms,
+        executed=executed,
+        decision_id=decision.decision_id,
+        receipt_id=(
+            receipt.receipt_id
+            if receipt is not None
+            else None
+        ),
+        policy_version=ACTIVE_POLICY.version,
     )
 
     snapshot = store.session_snapshot(
@@ -316,7 +349,7 @@ async def evaluate_gateway(
     return jsonable_encoder(
         {
             "decision": decision,
-            "executed": receipt is not None,
+            "executed": executed,
             "receipt": receipt,
             "session": snapshot,
             "composition_analysis": latest_composition,
@@ -471,6 +504,56 @@ async def attack_my_agent() -> dict[str, Any]:
     return jsonable_encoder(response)
 
 
+@app.get("/audit/events")
+async def audit_events() -> dict[str, Any]:
+    """Return process-local gateway audit events."""
+
+    events = audit_log.list_event_dicts()
+
+    return jsonable_encoder(
+        {
+            "status": "ok",
+            "policy_version": ACTIVE_POLICY.version,
+            "event_count": len(events),
+            "events": events,
+        }
+    )
+
+
+@app.get("/audit/export")
+async def audit_export(
+    format: str = "json",
+) -> Any:
+    """Export gateway audit evidence as JSON or CSV."""
+
+    normalized_format = format.strip().lower()
+
+    if normalized_format == "json":
+        return jsonable_encoder(
+            audit_log.export_json()
+        )
+
+    if normalized_format == "csv":
+        return Response(
+            content=audit_log.export_csv(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": (
+                    "attachment; "
+                    'filename="aegistwin-audit.csv"'
+                )
+            },
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Unsupported audit export format. "
+            "Use 'json' or 'csv'."
+        ),
+    )
+
+
 @app.get("/telemetry")
 async def telemetry() -> dict[str, Any]:
     """Expose management and security telemetry."""
@@ -504,6 +587,9 @@ async def telemetry() -> dict[str, Any]:
                     == ApprovalStatus.PENDING
                     for approval
                     in store.approvals.values()
+                ),
+                "audit_event_count": len(
+                    audit_log.list_events()
                 ),
             },
             "controls": {
@@ -567,6 +653,7 @@ async def runtime_reset() -> dict[str, str]:
     store.reset()
     budget_manager.reset()
     runtime_telemetry.reset()
+    audit_log.reset()
 
     return {
         "status": "ok",
