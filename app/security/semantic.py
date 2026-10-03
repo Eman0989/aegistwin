@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
-from app.contracts import InstructionOrigin, RiskLevel, ToolCall
+from app.contracts import RiskLevel, ToolCall
 
 
-UNTRUSTED_ORIGINS = {
-    InstructionOrigin.WEB_UNTRUSTED,
-    InstructionOrigin.DOCUMENT_UNTRUSTED,
-    InstructionOrigin.EMAIL_UNTRUSTED,
-    InstructionOrigin.MCP_TOOL_OUTPUT,
-    InstructionOrigin.EXTERNAL_API,
-}
+JAILBREAK_PATTERNS = (
+    r"\bdeveloper mode\b",
+    r"\bjailbreak\b",
+    r"\bbypass (all |the )?(security|safety|restrictions?|guardrails?)\b",
+    r"\bdisable (all |the )?(security|safety|restrictions?|guardrails?)\b",
+    r"\bwithout (any )?(security|safety) restrictions?\b",
+    r"\bignore (all |the )?safety rules?\b",
+)
 
 INJECTION_PATTERNS = (
     r"\bignore (all |any )?(previous|prior|system) instructions?\b",
@@ -28,8 +28,6 @@ INJECTION_PATTERNS = (
     r"\bdo not tell (the )?user\b",
     r"\bpretend (that )?you are\b",
     r"\byou are now\b",
-    r"\bdeveloper mode\b",
-    r"\bjailbreak\b",
 )
 
 
@@ -54,97 +52,176 @@ class SemanticVerdict:
 
 
 class SemanticDetector(Protocol):
-    def analyze(self, call: ToolCall) -> SemanticVerdict:
-        """Analyze a proposed tool call for semantic attacks."""
+    def analyze(
+        self,
+        call: ToolCall,
+    ) -> SemanticVerdict:
+        """Analyze a proposed call for semantic attacks."""
 
 
-def _serialize(value: Any) -> str:
-    try:
-        return json.dumps(value, sort_keys=True, default=str)
-    except TypeError:
-        return str(value)
+def _extract_natural_language(
+    value: Any,
+) -> list[str]:
+    """Extract text while excluding internal metadata and flags."""
+
+    if isinstance(value, str):
+        return [value]
+
+    if isinstance(value, dict):
+        extracted: list[str] = []
+
+        for nested_value in value.values():
+            extracted.extend(
+                _extract_natural_language(
+                    nested_value
+                )
+            )
+
+        return extracted
+
+    if isinstance(value, (list, tuple, set)):
+        extracted: list[str] = []
+
+        for item in value:
+            extracted.extend(
+                _extract_natural_language(item)
+            )
+
+        return extracted
+
+    return []
 
 
-def semantic_input_for(call: ToolCall) -> str:
-    arguments = _serialize(call.arguments)
+def semantic_input_for(
+    call: ToolCall,
+) -> str:
+    """Build model input from natural-language content only."""
 
-    return (
-        f"Original user intent:\n{call.original_user_intent[:2000]}\n\n"
-        f"Instruction origin:\n{call.instruction_origin.value}\n\n"
-        f"Proposed tool:\n{call.tool_name}\n\n"
-        f"Proposed arguments:\n{arguments[:4000]}"
+    argument_text = _extract_natural_language(
+        call.arguments
     )
+
+    sections = [
+        call.original_user_intent.strip(),
+        *(
+            text.strip()
+            for text in argument_text
+            if text.strip()
+        ),
+    ]
+
+    combined = "\n\n".join(
+        section
+        for section in sections
+        if section
+    )
+
+    return combined[:6000]
+
+
+def _matching_patterns(
+    text: str,
+    patterns: tuple[str, ...],
+) -> list[str]:
+    return [
+        pattern
+        for pattern in patterns
+        if re.search(
+            pattern,
+            text,
+            flags=re.IGNORECASE,
+        )
+    ]
 
 
 class DeterministicFallbackDetector:
-    """Safe fallback when the semantic model is unavailable."""
+    """Fallback when the semantic model is unavailable."""
 
-    def analyze(self, call: ToolCall) -> SemanticVerdict:
+    def analyze(
+        self,
+        call: ToolCall,
+    ) -> SemanticVerdict:
         text = semantic_input_for(call)
 
-        matches = [
-            pattern
-            for pattern in INJECTION_PATTERNS
-            if re.search(pattern, text, flags=re.IGNORECASE)
-        ]
+        jailbreak_matches = _matching_patterns(
+            text,
+            JAILBREAK_PATTERNS,
+        )
 
-        untrusted = call.instruction_origin in UNTRUSTED_ORIGINS
-
-        if matches:
+        if jailbreak_matches:
             score = min(
                 0.99,
-                (0.82 if untrusted else 0.70)
-                + (0.04 * len(matches)),
+                0.86 + (0.04 * len(jailbreak_matches)),
             )
 
             return SemanticVerdict(
                 malicious=True,
                 score=score,
-                category=(
-                    "PROMPT_INJECTION"
-                    if untrusted
-                    else "JAILBREAK_ATTEMPT"
-                ),
+                category="JAILBREAK_ATTEMPT",
                 reason=(
-                    "Instruction-override language was detected "
-                    "in the proposed action."
+                    "Jailbreak or security-bypass language "
+                    "was detected in the proposed action."
                 ),
                 engine="deterministic-fallback",
-                risk_level=(
-                    RiskLevel.CRITICAL
-                    if untrusted
-                    else RiskLevel.HIGH
+                risk_level=RiskLevel.HIGH,
+            )
+
+        injection_matches = _matching_patterns(
+            text,
+            INJECTION_PATTERNS,
+        )
+
+        if injection_matches:
+            score = min(
+                0.99,
+                0.82 + (0.04 * len(injection_matches)),
+            )
+
+            return SemanticVerdict(
+                malicious=True,
+                score=score,
+                category="PROMPT_INJECTION",
+                reason=(
+                    "Instruction-override language was "
+                    "detected in the proposed action."
                 ),
+                engine="deterministic-fallback",
+                risk_level=RiskLevel.CRITICAL,
             )
 
         return SemanticVerdict(
             malicious=False,
-            score=0.20 if untrusted else 0.05,
+            score=0.05,
             category="BENIGN",
-            reason="No semantic attack signal was detected.",
-            engine="deterministic-fallback",
-            risk_level=(
-                RiskLevel.MEDIUM
-                if untrusted
-                else RiskLevel.LOW
+            reason=(
+                "No semantic attack signal was detected."
             ),
+            engine="deterministic-fallback",
+            risk_level=RiskLevel.LOW,
         )
 
 
 class TransformersPromptInjectionDetector:
-    """Local AI classifier using ProtectAI's DeBERTa model."""
+    """Local ProtectAI DeBERTa prompt-injection classifier."""
 
-    MODEL_NAME = "protectai/deberta-v3-base-prompt-injection-v2"
+    MODEL_NAME = (
+        "protectai/"
+        "deberta-v3-base-prompt-injection-v2"
+    )
 
-    def __init__(self, threshold: float = 0.80) -> None:
+    _shared_pipeline: ClassVar[Any | None] = None
+
+    def __init__(
+        self,
+        threshold: float = 0.80,
+    ) -> None:
         self.threshold = threshold
-        self._pipeline: Any = None
 
     def _load(self) -> Any:
-        if self._pipeline is None:
+        if self.__class__._shared_pipeline is None:
             from transformers import pipeline
 
-            self._pipeline = pipeline(
+            self.__class__._shared_pipeline = pipeline(
                 "text-classification",
                 model=self.MODEL_NAME,
                 tokenizer=self.MODEL_NAME,
@@ -152,11 +229,29 @@ class TransformersPromptInjectionDetector:
                 max_length=512,
             )
 
-        return self._pipeline
+        return self.__class__._shared_pipeline
 
-    def analyze(self, call: ToolCall) -> SemanticVerdict:
+    def analyze(
+        self,
+        call: ToolCall,
+    ) -> SemanticVerdict:
+        text = semantic_input_for(call)
+
+        if not text:
+            return SemanticVerdict(
+                malicious=False,
+                score=0.0,
+                category="BENIGN",
+                reason=(
+                    "No natural-language content required "
+                    "semantic classification."
+                ),
+                engine=self.MODEL_NAME,
+                risk_level=RiskLevel.LOW,
+            )
+
         classifier = self._load()
-        result = classifier(semantic_input_for(call))[0]
+        result = classifier(text)[0]
 
         label = str(result["label"]).lower()
         score = float(result["score"])
@@ -187,7 +282,10 @@ class TransformersPromptInjectionDetector:
             reason=(
                 "The AI classifier detected prompt injection."
                 if malicious
-                else "The AI classifier found no prompt injection."
+                else (
+                    "The AI classifier found no "
+                    "prompt injection."
+                )
             ),
             engine=self.MODEL_NAME,
             risk_level=(
@@ -199,7 +297,7 @@ class TransformersPromptInjectionDetector:
 
 
 class HybridSemanticDetector:
-    """Prefer the AI model and fail safely to deterministic detection."""
+    """Prefer the AI model and fail safely to detection rules."""
 
     def __init__(
         self,
@@ -208,12 +306,21 @@ class HybridSemanticDetector:
         threshold: float = 0.80,
     ) -> None:
         self.enable_model = enable_model
-        self.model = TransformersPromptInjectionDetector(
-            threshold=threshold
-        )
-        self.fallback = DeterministicFallbackDetector()
 
-    def analyze(self, call: ToolCall) -> SemanticVerdict:
+        self.model = (
+            TransformersPromptInjectionDetector(
+                threshold=threshold
+            )
+        )
+
+        self.fallback = (
+            DeterministicFallbackDetector()
+        )
+
+    def analyze(
+        self,
+        call: ToolCall,
+    ) -> SemanticVerdict:
         if not self.enable_model:
             return self.fallback.analyze(call)
 
