@@ -38,6 +38,12 @@ budgets:
   max_external_http_calls_per_session: 10
   max_estimated_cost_per_session: 100.0
 
+  max_agent_turns_per_session: 20
+  max_input_tokens_per_session: 100000
+  max_output_tokens_per_session: 50000
+  max_execution_duration_ms_per_session: 300000.0
+  max_model_runtime_ms_per_session: 240000.0
+
 actions:
   sensitive_external_data: BLOCK
   unknown_tool: BLOCK
@@ -62,3 +68,9 @@ organization_ceilings:
   maximum_tool_calls_per_session: 1000
   maximum_external_http_calls_per_session: 100
   maximum_estimated_cost_per_session: 1000.0
+
+  maximum_agent_turns_per_session: 100
+  maximum_input_tokens_per_session: 1000000
+  maximum_output_tokens_per_session: 500000
+  maximum_execution_duration_ms_per_session: 1800000.0
+  maximum_model_runtime_ms_per_session: 1200000.0
