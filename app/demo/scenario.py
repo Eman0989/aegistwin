@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -12,6 +13,15 @@ from app.contracts import (
 from app.controls.policy import PolicyEngine
 from app.gateway.service import Gateway
 
+GatewayFactory = Callable[[PolicyEngine], Gateway]
+
+
+def _create_gateway(
+    policy_engine: PolicyEngine,
+    gateway_factory: GatewayFactory | None,
+) -> Gateway:
+    return gateway_factory(policy_engine) if gateway_factory else Gateway(policy_engine)
+
 
 def _call(session_id: str, tool_name: str, origin: InstructionOrigin, intent: str, **arguments) -> ToolCall:
     return ToolCall(
@@ -25,10 +35,14 @@ def _call(session_id: str, tool_name: str, origin: InstructionOrigin, intent: st
     )
 
 
-async def run_malicious_workflow(policy_engine: PolicyEngine) -> WorkflowResult:
+async def run_malicious_workflow(
+    policy_engine: PolicyEngine,
+    *,
+    gateway_factory: GatewayFactory | None = None,
+) -> WorkflowResult:
     session_id = f"SES-{uuid4().hex[:8]}"
     intent = "Summarize this invoice"
-    gateway = Gateway(policy_engine)
+    gateway = _create_gateway(policy_engine, gateway_factory)
     receipts = []
     decisions = []
 
@@ -87,10 +101,14 @@ async def run_malicious_workflow(policy_engine: PolicyEngine) -> WorkflowResult:
     )
 
 
-async def run_legitimate_workflow(policy_engine: PolicyEngine) -> WorkflowResult:
+async def run_legitimate_workflow(
+    policy_engine: PolicyEngine,
+    *,
+    gateway_factory: GatewayFactory | None = None,
+) -> WorkflowResult:
     session_id = f"SES-{uuid4().hex[:8]}"
     intent = "Summarize this invoice and keep it internal"
-    gateway = Gateway(policy_engine)
+    gateway = _create_gateway(policy_engine, gateway_factory)
     receipts = []
     decisions = []
 

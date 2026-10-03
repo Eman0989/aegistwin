@@ -5,9 +5,11 @@ from typing import Any
 from app.contracts import WorkflowResult
 from app.controls.policy import PolicyEngine
 from app.demo.scenario import run_legitimate_workflow, run_malicious_workflow
+from app.gateway.service import Gateway
 from app.security.compiler import compile_guardrail
 
-ScenarioRunner = Callable[[PolicyEngine], Awaitable[WorkflowResult]]
+ScenarioRunner = Callable[..., Awaitable[WorkflowResult]]
+GatewayFactory = Callable[[PolicyEngine], Gateway]
 Timer = Callable[[], float]
 
 
@@ -15,9 +17,13 @@ async def _run_timed(
     runner: ScenarioRunner,
     policy: PolicyEngine,
     timer: Timer,
+    gateway_factory: GatewayFactory | None,
 ) -> tuple[WorkflowResult, float]:
     started = timer()
-    result = await runner(policy)
+    if gateway_factory is None:
+        result = await runner(policy)
+    else:
+        result = await runner(policy, gateway_factory=gateway_factory)
     elapsed_ms = max(0.0, (timer() - started) * 1000)
     return result, elapsed_ms
 
@@ -27,20 +33,25 @@ async def run_attack_repair_replay(
     malicious_runner: ScenarioRunner = run_malicious_workflow,
     legitimate_runner: ScenarioRunner = run_legitimate_workflow,
     timer: Timer = perf_counter,
+    gateway_factory: GatewayFactory | None = None,
 ) -> dict[str, Any]:
     policy = PolicyEngine()
-    before, before_attack_ms = await _run_timed(malicious_runner, policy, timer)
+    before, before_attack_ms = await _run_timed(
+        malicious_runner, policy, timer, gateway_factory
+    )
     if before.attack_path is None:
         raise RuntimeError("Canonical attack was not reproduced")
 
     legitimate_before, legitimate_before_ms = await _run_timed(
-        legitimate_runner, policy, timer
+        legitimate_runner, policy, timer, gateway_factory
     )
     guardrail = compile_guardrail(before.attack_path)
     policy.install(guardrail)
-    after, after_attack_ms = await _run_timed(malicious_runner, policy, timer)
+    after, after_attack_ms = await _run_timed(
+        malicious_runner, policy, timer, gateway_factory
+    )
     legitimate_after, legitimate_after_ms = await _run_timed(
-        legitimate_runner, policy, timer
+        legitimate_runner, policy, timer, gateway_factory
     )
 
     regression_passed = (

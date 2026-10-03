@@ -73,6 +73,9 @@ class BudgetManager:
     def snapshot(self, session_id: str) -> BudgetUsage:
         return self._usage.get(session_id, BudgetUsage())
 
+    def snapshots(self) -> dict[str, BudgetUsage]:
+        return dict(self._usage)
+
     def reset(self, session_id: str | None = None) -> None:
         if session_id is None:
             self._usage.clear()

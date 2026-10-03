@@ -141,11 +141,8 @@ def _metrics(cases: list[BenchmarkCase]) -> BenchmarkMetrics:
     )
 
 
-async def run_replay_benchmark(
-    *, replay_runner: ReplayRunner | None = None
-) -> BenchmarkReport:
-    """Run canonical cases before/after the compiled guardrail and report measured metrics."""
-    replay = await (replay_runner or run_attack_repair_replay)()
+def build_benchmark_report(replay: dict[str, Any]) -> BenchmarkReport:
+    """Build metrics from an already-executed before/after replay."""
     timings = replay["case_timings_ms"]
     before_cases = [
         _case_result("before", "malicious", replay["before"], timings["before_attack"]),
@@ -193,3 +190,11 @@ async def run_replay_benchmark(
         regression_suite_passed=regression_passed,
         guardrail=replay["generated_guardrail"],
     )
+
+
+async def run_replay_benchmark(
+    *, replay_runner: ReplayRunner | None = None
+) -> BenchmarkReport:
+    """Run canonical cases before/after the compiled guardrail and report measured metrics."""
+    replay = await (replay_runner or run_attack_repair_replay)()
+    return build_benchmark_report(replay)
