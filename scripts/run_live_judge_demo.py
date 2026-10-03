@@ -203,10 +203,45 @@ def main() -> None:
     )
     status = status_response.json()
 
+    telemetry_response = client.get(
+        "/telemetry"
+    )
+    telemetry = telemetry_response.json()
+    metrics = telemetry["metrics"]
+    latency = metrics["latency_ms"]
+
     print()
     print("=" * 72)
     print("RUNTIME TELEMETRY")
     print("=" * 72)
+    print(
+        "EVALUATED CALLS:",
+        metrics["evaluation_count"],
+    )
+    print(
+        "ALLOWED:",
+        metrics["action_counts"]["ALLOW"],
+    )
+    print(
+        "BLOCKED:",
+        metrics["action_counts"]["BLOCK"],
+    )
+    print(
+        "EXECUTED:",
+        metrics["executed_count"],
+    )
+    print(
+        "PREVENTED:",
+        metrics["prevented_count"],
+    )
+    print(
+        "AVERAGE LATENCY:",
+        f"{latency['average']:.2f} ms",
+    )
+    print(
+        "P95 LATENCY:",
+        f"{latency['p95']:.2f} ms",
+    )
     print("RECORDED RECEIPTS:", status["receipts"])
     print("RECORDED DECISIONS:", status["decisions"])
     print(

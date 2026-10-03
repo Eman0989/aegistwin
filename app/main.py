@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from time import perf_counter
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -37,6 +38,7 @@ from app.security.semantic import (
     HybridSemanticDetector,
 )
 from app.store import InMemoryStore
+from app.telemetry import RuntimeTelemetry
 from app.twin.api_analysis import (
     build_twin_analysis,
 )
@@ -74,6 +76,7 @@ app.add_middleware(
 )
 
 store = InMemoryStore()
+runtime_telemetry = RuntimeTelemetry()
 approval_manager = ApprovalManager(store)
 
 budget_manager = BudgetManager(
@@ -272,11 +275,23 @@ async def evaluate_gateway(
 ) -> dict[str, Any]:
     """Evaluate and optionally execute one tool call."""
 
+    started = perf_counter()
+
     decision, receipt = await production_gateway.process(
         request.call,
         request.input_artifacts,
         approval_id=request.approval_id,
         estimated_cost=request.estimated_cost,
+    )
+
+    latency_ms = (
+        perf_counter() - started
+    ) * 1000.0
+
+    runtime_telemetry.record(
+        action=decision.action,
+        executed=receipt is not None,
+        latency_ms=latency_ms,
     )
 
     snapshot = store.session_snapshot(
@@ -456,6 +471,71 @@ async def attack_my_agent() -> dict[str, Any]:
     return jsonable_encoder(response)
 
 
+@app.get("/telemetry")
+async def telemetry() -> dict[str, Any]:
+    """Expose management and security telemetry."""
+
+    metrics = runtime_telemetry.snapshot()
+
+    return jsonable_encoder(
+        {
+            "status": "ok",
+            "policy_version": ACTIVE_POLICY.version,
+            "metrics": metrics,
+            "audit": {
+                "session_count": len(
+                    store.sessions
+                ),
+                "receipt_count": len(
+                    store.receipts
+                ),
+                "decision_count": len(
+                    store.decisions
+                ),
+                "guardrail_count": len(
+                    store.guardrails
+                ),
+                "pending_approvals": sum(
+                    getattr(
+                        approval,
+                        "status",
+                        None,
+                    )
+                    == ApprovalStatus.PENDING
+                    for approval
+                    in store.approvals.values()
+                ),
+            },
+            "controls": {
+                "tool_allow_list": (
+                    production_gateway
+                    .enforce_tool_allow_list
+                ),
+                "semantic_detection": (
+                    production_gateway
+                    .enforce_semantic
+                ),
+                "composition_analysis": (
+                    production_gateway
+                    .enforce_composition
+                ),
+                "deterministic_policy": (
+                    production_gateway
+                    .enforce_deterministic_policy
+                ),
+                "human_approval": (
+                    production_gateway
+                    .enforce_human_approval
+                ),
+                "budget_enforcement": (
+                    production_gateway
+                    .enforce_budget
+                ),
+            },
+        }
+    )
+
+
 @app.get("/runtime/status")
 async def runtime_status() -> dict[str, Any]:
     pending_approvals = sum(
@@ -486,6 +566,7 @@ async def runtime_status() -> dict[str, Any]:
 async def runtime_reset() -> dict[str, str]:
     store.reset()
     budget_manager.reset()
+    runtime_telemetry.reset()
 
     return {
         "status": "ok",
