@@ -10,3 +10,5 @@ build/
 data/*.db
 data/*.db-wal
 data/*.db-shmfrontend/node_modules/
+
+frontend/node_modules/
