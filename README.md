@@ -468,3 +468,81 @@ http://127.0.0.1:8000/telemetry
 - Ollama
 - Llama 3.2 3B
 - Pytest
+
+## Policy Configuration and Strictness Profiles
+
+AegisTwin is policy-driven. Security controls, semantic detection sensitivity,
+tool and model permissions, data handling rules, and runtime budgets are
+configured through YAML policy files rather than being hard-coded into the
+application.
+
+The project provides three example security profiles:
+
+| Profile | Intended Use | Semantic Threshold | Tool Calls | External HTTP Calls | Estimated Cost | Agent Turns |
+|---|---|---:|---:|---:|---:|---:|
+| Relaxed | Development and experimentation | 0.90 | 200 | 20 | 200.0 | 40 |
+| Balanced | General-purpose/default operation | 0.80 | 100 | 10 | 100.0 | 20 |
+| Strict | Sensitive and high-risk workloads | 0.65 | 40 | 3 | 25.0 | 10 |
+
+### Relaxed Profile
+
+`policies/aegis-relaxed.yaml`
+
+The Relaxed profile is intended for development and experimentation.
+It allows larger execution budgets and requires higher semantic confidence
+before semantic security detection is triggered. Deterministic protections
+such as blocked sensitive-data flows, unknown tools, unknown models, and
+historical exploit rules remain enabled.
+
+### Balanced Profile
+
+`policies/aegis.yaml`
+
+Balanced is the default AegisTwin policy. It provides strong security
+enforcement while preserving normal agent utility. It combines semantic
+detection, deterministic policy enforcement, composition analysis, data
+lineage, human approval, exploit detection, and resource-budget enforcement.
+
+### Strict Profile
+
+`policies/aegis-strict.yaml`
+
+The Strict profile is intended for sensitive or production workloads. It
+uses a lower semantic detection threshold and significantly tighter limits
+for tool calls, external network requests, agent turns, tokens, estimated
+cost, and execution time.
+
+### Non-Overridable Organization Ceilings
+
+Application-level profiles cannot weaken organization-wide security
+boundaries. AegisTwin separately defines organization ceilings for critical
+controls such as blocked sensitive-data labels, blocked external
+destinations, maximum execution budgets, token limits, and runtime limits.
+
+For example, credentials and secrets remain protected regardless of the
+selected application profile.
+
+This separation allows development teams to tune application behaviour
+without being able to override mandatory organizational security controls.
+
+### Runtime Policy Enforcement
+
+The active AegisTwin policy is validated before use and is exposed through
+the control layer's policy and capability endpoints. Policy configuration
+includes:
+
+- tool allow-lists;
+- model allow-lists;
+- semantic detection thresholds;
+- sensitive-data labels;
+- external destination rules;
+- deterministic enforcement actions;
+- historical exploit signatures;
+- tool-call and HTTP-call budgets;
+- cost and agent-turn budgets;
+- token budgets;
+- execution and model-runtime limits.
+
+The default active configuration is `policies/aegis.yaml`.
+AegisTwin supports runtime policy reload so updated policy values can be
+applied without redesigning the control layer.
