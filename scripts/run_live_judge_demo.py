@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from secrets import token_urlsafe
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -79,7 +81,25 @@ def print_result(
 
 
 def main() -> None:
-    client.post("/runtime/reset")
+    demo_admin_key = token_urlsafe(32)
+
+    os.environ[
+        "AEGISTWIN_ADMIN_KEY"
+    ] = demo_admin_key
+
+    management_headers = {
+        "X-API-Key": demo_admin_key,
+    }
+
+    reset_response = client.post(
+        "/runtime/reset",
+        headers=management_headers,
+    )
+
+    assert (
+        reset_response.status_code
+        == 200
+    ), reset_response.text
 
     results = [
         evaluate(
@@ -199,13 +219,27 @@ def main() -> None:
         assert result["executed"] is False
 
     status_response = client.get(
-        "/runtime/status"
+        "/runtime/status",
+        headers=management_headers,
     )
+
+    assert (
+        status_response.status_code
+        == 200
+    ), status_response.text
+
     status = status_response.json()
 
     telemetry_response = client.get(
-        "/telemetry"
+        "/telemetry",
+        headers=management_headers,
     )
+
+    assert (
+        telemetry_response.status_code
+        == 200
+    ), telemetry_response.text
+
     telemetry = telemetry_response.json()
     metrics = telemetry["metrics"]
     latency = metrics["latency_ms"]
