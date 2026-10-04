@@ -15,13 +15,16 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import { useState } from "react";
+import {
+  useState,
+} from "react";
 
 import useAegisConsole from "../../hooks/useAegisConsole";
 
 import AttacksView from "./AttacksView";
 import DigitalTwinView from "./DigitalTwinView";
 import GuardrailsView from "./GuardrailsView";
+import OperationsPanel from "./OperationsPanel";
 import ReplayView from "./ReplayView";
 import ReportsView from "./ReportsView";
 import TwinGraph from "./TwinGraph";
@@ -56,10 +59,17 @@ type ConsolePage =
    HELPERS
    ========================================================= */
 
-const delay = (milliseconds: number) =>
-  new Promise<void>((resolve) => {
-    window.setTimeout(resolve, milliseconds);
-  });
+const delay = (
+  milliseconds: number,
+) =>
+  new Promise<void>(
+    (resolve) => {
+      window.setTimeout(
+        resolve,
+        milliseconds,
+      );
+    },
+  );
 
 /* =========================================================
    DASHBOARD
@@ -72,32 +82,82 @@ export default function Dashboard({
      ACTIVE PAGE
      ======================================================= */
 
-  const [activePage, setActivePage] =
-    useState<ConsolePage>("overview");
+  const [
+    activePage,
+    setActivePage,
+  ] =
+    useState<ConsolePage>(
+      "overview",
+    );
 
   /* =======================================================
-     ATTACK PIPELINE STATE
+     ATTACK PIPELINE
      ======================================================= */
 
-  const [stage, setStage] =
-    useState<AttackStage>("idle");
+  const [
+    stage,
+    setStage,
+  ] =
+    useState<AttackStage>(
+      "idle",
+    );
 
   /* =======================================================
-     REAL AEGISTWIN BACKEND
+     REAL BACKEND STATE
      ======================================================= */
 
   const {
+    /* attack */
+
     result,
+
+    /* public backend */
+
+    health,
+    policy,
+
+    /* viewer / management */
+
     runtime,
+    telemetry,
+    persistence,
+
+    /* normalized twin model */
+
     model,
 
+    /* RBAC */
+
+    apiAccess,
+
+    /* loading */
+
     runtimeLoading,
+    telemetryLoading,
+    publicLoading,
     resetLoading,
+
+    /* errors */
 
     error,
 
+    /* core */
+
     executeAttack,
     executeReset,
+
+    /* management refresh */
+
+    refreshManagementData,
+
+    /* RBAC */
+
+    connectViewer,
+    connectSecurity,
+    connectAdmin,
+    removeApiKey,
+
+    /* UI */
 
     clearResult,
     clearError,
@@ -184,109 +244,138 @@ export default function Dashboard({
      ATTACK MY AGENT
      ======================================================= */
 
-  const runAttack = async () => {
-    if (
-      isRunning ||
-      resetLoading
-    ) {
-      return;
-    }
+  const runAttack =
+    async () => {
+      if (
+        isRunning ||
+        resetLoading
+      ) {
+        return;
+      }
 
-    clearError();
-    clearResult();
+      clearError();
+      clearResult();
 
-    try {
-      /* ===================================================
-         01 — DISCOVER
-         =================================================== */
+      try {
+        /* ===============================================
+           01 — DISCOVER
+           =============================================== */
 
-      setStage("discover");
+        setStage(
+          "discover",
+        );
 
-      /*
-       * Start the actual backend operation immediately.
-       */
+        /*
+         * Start the real backend workflow immediately.
+         */
 
-      const backendRequest =
-        executeAttack();
+        const backendRequest =
+          executeAttack();
 
-      await delay(700);
+        await delay(
+          700,
+        );
 
-      /* ===================================================
-         02 — ANALYZE
-         =================================================== */
+        /* ===============================================
+           02 — ANALYZE
+           =============================================== */
 
-      setStage("analyze");
+        setStage(
+          "analyze",
+        );
 
-      await delay(900);
+        await delay(
+          900,
+        );
 
-      /* ===================================================
-         03 — COMPILE
-         =================================================== */
+        /* ===============================================
+           03 — COMPILE
+           =============================================== */
 
-      setStage("compile");
+        setStage(
+          "compile",
+        );
 
-      await delay(750);
+        await delay(
+          750,
+        );
 
-      /*
-       * Do not expose replay evidence before the real
-       * backend has returned the complete analysis.
-       */
+        /*
+         * Wait for real backend evidence before
+         * progressing into replay.
+         */
 
-      await backendRequest;
+        await backendRequest;
 
-      /* ===================================================
-         04 — REPLAY
-         =================================================== */
+        /* ===============================================
+           04 — REPLAY
+           =============================================== */
 
-      setStage("replay");
+        setStage(
+          "replay",
+        );
 
-      await delay(900);
+        await delay(
+          900,
+        );
 
-      /* ===================================================
-         05 — VERIFY
-         =================================================== */
+        /* ===============================================
+           05 — VERIFY
+           =============================================== */
 
-      setStage("verify");
+        setStage(
+          "verify",
+        );
 
-      await delay(750);
+        await delay(
+          750,
+        );
 
-      /* ===================================================
-         COMPLETE
-         =================================================== */
+        /* ===============================================
+           COMPLETE
+           =============================================== */
 
-      setStage("complete");
-    } catch {
-      setStage("error");
-    }
-  };
+        setStage(
+          "complete",
+        );
+      } catch {
+        setStage(
+          "error",
+        );
+      }
+    };
 
   /* =======================================================
      RESET RUNTIME
+
+     The frozen backend requires ADMIN RBAC.
+     No admin credential is hard-coded.
      ======================================================= */
 
-  const resetConsole = async () => {
-    if (
-      isRunning ||
-      resetLoading
-    ) {
-      return;
-    }
+  const resetConsole =
+    async () => {
+      if (
+        isRunning ||
+        resetLoading ||
+        !apiAccess.admin
+      ) {
+        return;
+      }
 
-    clearError();
+      clearError();
 
-    try {
-      await executeReset();
+      try {
+        await executeReset();
 
-      /*
-       * executeReset clears the backend runtime/result.
-       * Reset the visual workflow as well.
-       */
-
-      setStage("idle");
-    } catch {
-      setStage("error");
-    }
-  };
+        setStage(
+          "idle",
+        );
+      } catch {
+        setStage(
+          "error",
+        );
+      }
+    };
 
   /* =======================================================
      RENDER
@@ -321,12 +410,15 @@ export default function Dashboard({
           <button
             type="button"
             className={`console-nav-item ${
-              activePage === "overview"
+              activePage ===
+              "overview"
                 ? "active"
                 : ""
             }`}
             onClick={() =>
-              setActivePage("overview")
+              setActivePage(
+                "overview",
+              )
             }
           >
             <LayoutDashboard
@@ -354,7 +446,9 @@ export default function Dashboard({
               )
             }
           >
-            <Radar size={17} />
+            <Radar
+              size={17}
+            />
 
             <span>
               Digital Twin
@@ -366,15 +460,20 @@ export default function Dashboard({
           <button
             type="button"
             className={`console-nav-item ${
-              activePage === "attacks"
+              activePage ===
+              "attacks"
                 ? "active"
                 : ""
             }`}
             onClick={() =>
-              setActivePage("attacks")
+              setActivePage(
+                "attacks",
+              )
             }
           >
-            <Swords size={17} />
+            <Swords
+              size={17}
+            />
 
             <span>
               Attacks
@@ -411,15 +510,20 @@ export default function Dashboard({
           <button
             type="button"
             className={`console-nav-item ${
-              activePage === "replay"
+              activePage ===
+              "replay"
                 ? "active"
                 : ""
             }`}
             onClick={() =>
-              setActivePage("replay")
+              setActivePage(
+                "replay",
+              )
             }
           >
-            <Play size={17} />
+            <Play
+              size={17}
+            />
 
             <span>
               Replay
@@ -431,12 +535,15 @@ export default function Dashboard({
           <button
             type="button"
             className={`console-nav-item ${
-              activePage === "reports"
+              activePage ===
+              "reports"
                 ? "active"
                 : ""
             }`}
             onClick={() =>
-              setActivePage("reports")
+              setActivePage(
+                "reports",
+              )
             }
           >
             <ScrollText
@@ -454,31 +561,35 @@ export default function Dashboard({
             ================================================= */}
 
         <div className="console-sidebar__bottom">
-          {/* ENGINE */}
+          {/* BACKEND STATUS */}
 
           <div className="console-engine-status">
             <span />
 
             <div>
               <strong>
-                {runtimeLoading
+                {publicLoading
                   ? "ENGINE CHECKING"
-                  : runtime
+                  : health
                     ? "ENGINE ONLINE"
                     : "ENGINE OFFLINE"}
               </strong>
 
               <small>
-                {runtimeLoading
-                  ? "Checking runtime"
-                  : runtime
-                    ? `${model.runtime.decisions} decisions recorded`
-                    : "Runtime unavailable"}
+                {!health
+                  ? "Backend unavailable"
+                  : !apiAccess.viewer
+                    ? "Viewer access not connected"
+                    : runtimeLoading
+                      ? "Loading runtime"
+                      : runtime
+                        ? `${model.runtime.decisions} decisions recorded`
+                        : "Runtime unavailable"}
               </small>
             </div>
           </div>
 
-          {/* RESET */}
+          {/* ADMIN RESET */}
 
           <button
             type="button"
@@ -488,7 +599,13 @@ export default function Dashboard({
             }
             disabled={
               isRunning ||
-              resetLoading
+              resetLoading ||
+              !apiAccess.admin
+            }
+            title={
+              apiAccess.admin
+                ? "Reset AegisTwin runtime"
+                : "Admin API key required"
             }
           >
             {resetLoading ? (
@@ -505,11 +622,13 @@ export default function Dashboard({
             <span>
               {resetLoading
                 ? "Resetting runtime"
-                : "Reset runtime"}
+                : apiAccess.admin
+                  ? "Reset runtime"
+                  : "Reset · Admin required"}
             </span>
           </button>
 
-          {/* BACK */}
+          {/* BACK TO LANDING */}
 
           <button
             type="button"
@@ -528,12 +647,12 @@ export default function Dashboard({
       </aside>
 
       {/* ===================================================
-          MAIN
+          MAIN CONSOLE
           =================================================== */}
 
       <main className="console-main">
         {/* =================================================
-            TOP BAR
+            GLOBAL TOPBAR
             ================================================= */}
 
         <header className="console-topbar">
@@ -548,19 +667,21 @@ export default function Dashboard({
           </div>
 
           <div className="console-topbar__right">
-            {/* RUNTIME */}
+            {/* RUNTIME STATUS */}
 
             <div className="runtime-pill">
               <span />
 
               {runtimeLoading
                 ? "Checking runtime"
-                : runtime
-                  ? `Runtime connected · ${model.runtime.receipts} receipts`
-                  : "Runtime unavailable"}
+                : !apiAccess.viewer
+                  ? "Viewer access required"
+                  : runtime
+                    ? `Runtime connected · ${model.runtime.receipts} receipts`
+                    : "Runtime unavailable"}
             </div>
 
-            {/* ATTACK */}
+            {/* ATTACK MY AGENT */}
 
             <button
               type="button"
@@ -606,7 +727,7 @@ export default function Dashboard({
         </header>
 
         {/* =================================================
-            DIGITAL TWIN
+            DIGITAL TWIN PAGE
             ================================================= */}
 
         {activePage ===
@@ -620,7 +741,7 @@ export default function Dashboard({
         )}
 
         {/* =================================================
-            ATTACKS
+            ATTACK LAB PAGE
             ================================================= */}
 
         {activePage ===
@@ -642,7 +763,7 @@ export default function Dashboard({
         )}
 
         {/* =================================================
-            GUARDRAILS
+            GUARDRAILS PAGE
             ================================================= */}
 
         {activePage ===
@@ -663,7 +784,7 @@ export default function Dashboard({
         )}
 
         {/* =================================================
-            REPLAY
+            REPLAY PAGE
             ================================================= */}
 
         {activePage ===
@@ -684,7 +805,7 @@ export default function Dashboard({
         )}
 
         {/* =================================================
-            REPORTS
+            REPORTS PAGE
             ================================================= */}
 
         {activePage ===
@@ -701,14 +822,14 @@ export default function Dashboard({
         )}
 
         {/* =================================================
-            OVERVIEW
+            OVERVIEW PAGE
             ================================================= */}
 
         {activePage ===
           "overview" && (
           <>
             {/* =============================================
-                METRICS
+                CORE TWIN METRICS
                 ============================================= */}
 
             <section className="console-metrics">
@@ -836,7 +957,47 @@ export default function Dashboard({
             </section>
 
             {/* =============================================
-                ATTACK RUNNING
+                NEW — LIVE OPERATIONS / RBAC / TELEMETRY
+                ============================================= */}
+
+            <OperationsPanel
+              health={health}
+              policy={policy}
+              telemetry={
+                telemetry
+              }
+              runtime={runtime}
+              persistence={
+                persistence
+              }
+              apiAccess={
+                apiAccess
+              }
+              telemetryLoading={
+                telemetryLoading
+              }
+              publicLoading={
+                publicLoading
+              }
+              onConnectViewer={
+                connectViewer
+              }
+              onConnectSecurity={
+                connectSecurity
+              }
+              onConnectAdmin={
+                connectAdmin
+              }
+              onDisconnect={
+                removeApiKey
+              }
+              onRefresh={
+                refreshManagementData
+              }
+            />
+
+            {/* =============================================
+                PIPELINE RUNNING
                 ============================================= */}
 
             {isRunning && (
@@ -929,12 +1090,12 @@ export default function Dashboard({
             )}
 
             {/* =============================================
-                WORKSPACE
+                MAIN WORKSPACE
                 ============================================= */}
 
             <section className="console-workspace">
               {/* ===========================================
-                  DIGITAL TWIN
+                  EXECUTABLE TWIN
                   =========================================== */}
 
               <div className="twin-workspace">
@@ -966,7 +1127,7 @@ export default function Dashboard({
                 />
 
                 {/* =========================================
-                    PIPELINE
+                    ATTACK PIPELINE
                     ========================================= */}
 
                 <div className="analysis-pipeline">
@@ -1230,7 +1391,7 @@ export default function Dashboard({
                 </div>
 
                 {/* =========================================
-                    GUARDRAIL
+                    COMPILED GUARDRAIL
                     ========================================= */}
 
                 <div className="intel-section guardrail-section">
@@ -1275,7 +1436,7 @@ export default function Dashboard({
                 </div>
 
                 {/* =========================================
-                    REPLAY
+                    REPLAY RESULT
                     ========================================= */}
 
                 {stageIndex >=
@@ -1396,7 +1557,7 @@ export default function Dashboard({
                   )}
 
                 {/* =========================================
-                    BACKEND MODULES
+                    TWIN INTELLIGENCE MODULES
                     ========================================= */}
 
                 {result && (
