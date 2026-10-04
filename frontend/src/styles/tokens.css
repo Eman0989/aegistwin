@@ -1,0 +1,19 @@
+:root {
+  --obsidian: #05070b;
+  --navy: #08101c;
+  --midnight: #0b1526;
+
+  --cyan: #3cebff;
+  --blue: #4b7cff;
+  --violet: #8b5cff;
+
+  --danger: #ff3d6e;
+  --warning: #ffb84d;
+  --success: #2be6a6;
+
+  --white: #f5f8fc;
+  --soft: #9fb0c8;
+  --muted: #5e708b;
+
+  --border: #1b2b40;
+}

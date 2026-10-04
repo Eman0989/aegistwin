@@ -12,6 +12,18 @@ import {
 import FlowFieldBackground from
   "../components/landing/FlowFieldBackground";
 
+import PlatformSection from
+  "../components/landing/PlatformSection";
+
+import SecuritySection from
+  "../components/landing/SecuritySection";
+
+import TwinLabSection from
+  "../components/landing/TwinLabSection";
+
+import DocsSection from
+  "../components/landing/DocsSection";
+
 import HeroCoreMark from
   "../components/HeroCoreMark";
 
@@ -68,21 +80,21 @@ export default function LandingPage({
             aria-label="Primary navigation"
           >
             <a
-              href="#platform"
+              href="#platform-details"
               className="active"
             >
               Platform
             </a>
 
-            <a href="#security">
+            <a href="#security-details">
               Security
             </a>
 
-            <a href="#twin-lab">
+            <a href="#twin-lab-details">
               Twin Lab
             </a>
 
-            <a href="#docs">
+            <a href="#docs-details">
               Docs
             </a>
           </nav>
@@ -105,6 +117,7 @@ export default function LandingPage({
 
       {/* =====================================================
           HERO SECTION
+          ORIGINAL / FROZEN
           ===================================================== */}
 
       <main
@@ -236,6 +249,7 @@ export default function LandingPage({
             <button
               type="button"
               className="landing-btn landing-btn--secondary"
+              onClick={onOpenConsole}
             >
               <PlayCircle size={18} />
 
@@ -346,9 +360,6 @@ export default function LandingPage({
 
           {/* =================================================
               UNIQUE HERO MARK
-
-              No duplicate AEGISTWIN name.
-              No original logo here.
               ================================================= */}
 
           <div className="landing-hero-mark-shell">
@@ -431,7 +442,7 @@ export default function LandingPage({
       </main>
 
       {/* =====================================================
-          WORKFLOW / SECURITY STRIP
+          ORIGINAL WORKFLOW / SECURITY STRIP
           ===================================================== */}
 
       <section
@@ -518,6 +529,38 @@ export default function LandingPage({
           </div>
         </div>
       </section>
+
+      {/* =====================================================
+          PLATFORM
+          ===================================================== */}
+
+      <PlatformSection
+        onOpenConsole={onOpenConsole}
+      />
+
+      {/* =====================================================
+          SECURITY
+          ===================================================== */}
+
+      <SecuritySection
+        onOpenConsole={onOpenConsole}
+      />
+
+      {/* =====================================================
+          TWIN LAB
+          ===================================================== */}
+
+      <TwinLabSection
+        onOpenConsole={onOpenConsole}
+      />
+
+      {/* =====================================================
+          DOCS
+          ===================================================== */}
+
+      <DocsSection
+        onOpenConsole={onOpenConsole}
+      />
     </div>
   );
 }
