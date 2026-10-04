@@ -1,0 +1,54 @@
+[
+  {
+    "signature_id": "unsafe_deserialization",
+    "severity": "CRITICAL",
+    "description": "Known unsafe deserialization patterns.",
+    "patterns": [
+      "pickle\\.loads\\s*\\(",
+      "yaml\\.load\\s*\\(",
+      "ObjectInputStream",
+      "\\bdeserialize\\s*\\("
+    ]
+  },
+  {
+    "signature_id": "malicious_package",
+    "severity": "HIGH",
+    "description": "Known malicious or deliberately suspicious package-installation patterns.",
+    "patterns": [
+      "\\bmalicious[-_ ]package\\b",
+      "\\btyposquat[-_ ]package\\b",
+      "\\bevil[-_ ]package\\b"
+    ]
+  },
+  {
+    "signature_id": "shell_injection",
+    "severity": "CRITICAL",
+    "description": "Command chaining and shell-injection patterns.",
+    "patterns": [
+      ";\\s*rm\\s+-rf\\b",
+      "&&\\s*(curl|wget)\\b",
+      "\\$\\([^\\)]*\\)",
+      "\\b/bin/(sh|bash)\\s+-c\\b"
+    ]
+  },
+  {
+    "signature_id": "model_repository_trust_remote_code",
+    "severity": "CRITICAL",
+    "description": "Remote model repository code execution.",
+    "patterns": [
+      "trust_remote_code\\s*=\\s*True",
+      "trust_remote_code\\s*[:=]\\s*true"
+    ]
+  },
+  {
+    "signature_id": "credential_exfiltration",
+    "severity": "CRITICAL",
+    "description": "Known credential-exfiltration instructions.",
+    "patterns": [
+      "\\bexfiltrate\\s+(the\\s+)?credentials?\\b",
+      "\\bsend\\s+(the\\s+)?credentials?\\s+to\\b",
+      "\\bupload\\s+(the\\s+)?api[-_ ]?key\\b",
+      "\\bforward\\s+(the\\s+)?password\\s+to\\b"
+    ]
+  }
+]

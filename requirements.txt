@@ -5,3 +5,4 @@ networkx
 pytest
 pytest-asyncio
 httpx
+PyYAML>=6.0,<7.0
