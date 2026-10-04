@@ -1,0 +1,76 @@
+version: "1.0"
+
+controls:
+  tool_allow_list: true
+  semantic_detection: true
+  composition_analysis: true
+  deterministic_policy: true
+  data_lineage: true
+  human_approval: true
+  budget_enforcement: true
+  historical_attack_detection: true
+
+tools:
+  allowed:
+    - invoice_reader
+    - customer_database
+    - summarizer
+    - external_http
+
+models:
+  allowed:
+    - protectai/deberta-v3-base-prompt-injection-v2
+    - llama3.2:3b
+  semantic_threshold: 0.80
+
+data:
+  sensitive_labels:
+    - CustomerPII
+    - DerivedFrom<CustomerPII>
+    - Secret
+    - Credential
+
+  external_destinations:
+    - EXTERNAL
+
+budgets:
+  max_tool_calls_per_session: 100
+  max_external_http_calls_per_session: 10
+  max_estimated_cost_per_session: 100.0
+
+  max_agent_turns_per_session: 20
+  max_input_tokens_per_session: 100000
+  max_output_tokens_per_session: 50000
+  max_execution_duration_ms_per_session: 300000.0
+  max_model_runtime_ms_per_session: 240000.0
+
+actions:
+  sensitive_external_data: BLOCK
+  unknown_tool: BLOCK
+  unknown_model: BLOCK
+  historical_exploit: BLOCK
+
+historical_attack_signatures:
+  - unsafe_deserialization
+  - malicious_package
+  - shell_injection
+  - model_repository_trust_remote_code
+  - credential_exfiltration
+
+organization_ceilings:
+  permanently_blocked_data_labels:
+    - Secret
+    - Credential
+
+  permanently_blocked_destinations:
+    - EXTERNAL
+
+  maximum_tool_calls_per_session: 1000
+  maximum_external_http_calls_per_session: 100
+  maximum_estimated_cost_per_session: 1000.0
+
+  maximum_agent_turns_per_session: 100
+  maximum_input_tokens_per_session: 1000000
+  maximum_output_tokens_per_session: 500000
+  maximum_execution_duration_ms_per_session: 1800000.0
+  maximum_model_runtime_ms_per_session: 1200000.0
