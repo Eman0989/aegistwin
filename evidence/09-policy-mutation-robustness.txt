@@ -1,0 +1,33 @@
+
+==================================================================================
+AEGISTWIN — POLICY MUTATION ROBUSTNESS
+==================================================================================
+Same request evaluated under three validated policies
+Request estimated cost: 50.00
+==================================================================================
+[PASS] DEFAULT  cost_limit=100.00  request_cost=50.00  decision=ALLOW  executed=True
+         reason=No active guardrail matched.
+[PASS] STRICT   cost_limit=25.00   request_cost=50.00  decision=BLOCK  executed=False
+         reason=Maximum estimated cost for this session would be exceeded.
+[PASS] RELAXED  cost_limit=200.00  request_cost=50.00  decision=ALLOW  executed=True
+         reason=No active guardrail matched.
+
+==================================================================================
+POLICY MUTATION ROBUSTNESS SUMMARY
+==================================================================================
+DEFAULT POLICY RESULT:          ALLOW
+STRICT POLICY RESULT:           BLOCK
+RELAXED POLICY RESULT:          ALLOW
+
+POLICY MUTATION CHANGED BEHAVIOR: YES
+RELAXED POLICY RESTORED BEHAVIOR: YES
+STRICT VIOLATION EXECUTED:        NO
+
+VALIDATED POLICY PARAMETERS:
+  DEFAULT  cost=100.00  tools=100  http=10  semantic_threshold=0.80
+  STRICT   cost=25.00   tools=40   http=3   semantic_threshold=0.65
+  RELAXED  cost=200.00  tools=200  http=20  semantic_threshold=0.90
+
+==================================================================================
+AEGISTWIN POLICY MUTATION ROBUSTNESS: PASSED
+==================================================================================

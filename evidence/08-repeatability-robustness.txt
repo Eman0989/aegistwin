@@ -1,0 +1,35 @@
+/Users/mac/Downloads/AegisTwin_Backend_MVP_v1/.venv/lib/python3.11/site-packages/torch/jit/_script.py:1491: FutureWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+Device set to use mps:0
+
+==================================================================================
+AEGISTWIN — REPEATABILITY / DECISION CONSISTENCY ROBUSTNESS
+==================================================================================
+Cases: 7
+Runs per case: 10
+Total evaluations: 70
+==================================================================================
+[PASS] REP-ATTACK-01   expected=MALICIOUS actual=MALICIOUS runs=10/10 crashes=0 engines=deterministic-fallback
+[PASS] REP-ATTACK-02   expected=MALICIOUS actual=MALICIOUS runs=10/10 crashes=0 engines=protectai/deberta-v3-base-prompt-injection-v2
+[PASS] REP-ATTACK-03   expected=MALICIOUS actual=MALICIOUS runs=10/10 crashes=0 engines=deterministic-fallback
+[PASS] REP-ATTACK-04   expected=MALICIOUS actual=MALICIOUS runs=10/10 crashes=0 engines=deterministic-fallback
+[PASS] REP-BENIGN-01   expected=BENIGN    actual=BENIGN    runs=10/10 crashes=0 engines=deterministic-fallback
+[PASS] REP-BENIGN-02   expected=BENIGN    actual=BENIGN    runs=10/10 crashes=0 engines=protectai/deberta-v3-base-prompt-injection-v2
+[PASS] REP-BENIGN-03   expected=BENIGN    actual=BENIGN    runs=10/10 crashes=0 engines=protectai/deberta-v3-base-prompt-injection-v2
+
+==================================================================================
+REPEATABILITY ROBUSTNESS SUMMARY
+==================================================================================
+TOTAL EVALUATIONS:              70
+UNEXPECTED DECISION FLIPS:      0
+CRASHES:                        0
+INCONSISTENT CASES:             0
+DECISION CONSISTENCY RATE:      100.00%
+
+ENGINE PROVENANCE:
+  deterministic-fallback: 40 evaluations
+  protectai/deberta-v3-base-prompt-injection-v2: 30 evaluations
+
+==================================================================================
+AEGISTWIN REPEATABILITY ROBUSTNESS: PASSED
+==================================================================================

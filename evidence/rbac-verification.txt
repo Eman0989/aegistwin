@@ -1,0 +1,26 @@
+AEGISTWIN RBAC VERIFICATION
+Date: Sun Oct  4 08:11:52 CEST 2026
+Branch: integration
+Commit: 2dc6422
+
+VIEWER TESTS
+Viewer     GET     /telemetry               expected=200 actual=200 PASS
+Viewer     GET     /runtime/status          expected=200 actual=200 PASS
+Viewer     GET     /audit/events            expected=403 actual=403 PASS
+Viewer     GET     /audit/export            expected=403 actual=403 PASS
+
+SECURITY TESTS
+Security   GET     /telemetry               expected=200 actual=200 PASS
+Security   GET     /audit/events            expected=200 actual=200 PASS
+Security   GET     /audit/export            expected=200 actual=200 PASS
+Security   POST    /policy/reload           expected=403 actual=403 PASS
+Security   POST    /runtime/reset           expected=403 actual=403 PASS
+
+ADMIN TESTS
+Admin      GET     /telemetry               expected=200 actual=200 PASS
+Admin      GET     /audit/events            expected=200 actual=200 PASS
+Admin      GET     /audit/export            expected=200 actual=200 PASS
+Admin      POST    /policy/reload           expected=200 actual=200 PASS
+
+INVALID CREDENTIAL TEST
+Invalid    GET     /telemetry               expected=401 actual=401 PASS
