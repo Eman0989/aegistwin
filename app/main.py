@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 from fastapi import (
+    Depends,
     FastAPI,
     HTTPException,
     Response,
@@ -16,6 +17,12 @@ from pydantic import BaseModel, Field
 
 import app.config as runtime_config
 from app.audit import AuditLog, infer_control
+from app.auth import (
+    ManagementPrincipal,
+    require_admin,
+    require_security,
+    require_viewer,
+)
 from app.contracts import (
     DataArtifact,
     ToolCall,
@@ -546,7 +553,11 @@ async def get_policy() -> dict[
 
 
 @app.post("/policy/reload")
-async def reload_policy() -> dict[
+async def reload_policy(
+    _principal: ManagementPrincipal = Depends(
+        require_admin
+    ),
+) -> dict[
     str,
     Any,
 ]:
@@ -992,6 +1003,9 @@ async def extended_benchmark() -> dict[
 )
 async def get_runtime_session(
     session_id: str,
+    _principal: ManagementPrincipal = Depends(
+        require_viewer
+    ),
 ) -> dict[
     str,
     Any,
@@ -1047,7 +1061,11 @@ async def get_runtime_session(
 
 
 @app.get("/persistence/status")
-async def persistence_status() -> dict[
+async def persistence_status(
+    _principal: ManagementPrincipal = Depends(
+        require_viewer
+    ),
+) -> dict[
     str,
     Any,
 ]:
@@ -1212,7 +1230,11 @@ async def attack_my_agent() -> dict[
 
 
 @app.get("/audit/events")
-async def audit_events() -> dict[
+async def audit_events(
+    _principal: ManagementPrincipal = Depends(
+        require_security
+    ),
+) -> dict[
     str,
     Any,
 ]:
@@ -1240,6 +1262,9 @@ async def audit_events() -> dict[
 @app.get("/audit/export")
 async def audit_export(
     format: str = "json",
+    _principal: ManagementPrincipal = Depends(
+        require_security
+    ),
 ) -> Any:
     normalized_format = (
         format
@@ -1283,7 +1308,11 @@ async def audit_export(
 
 
 @app.get("/telemetry")
-async def telemetry() -> dict[
+async def telemetry(
+    _principal: ManagementPrincipal = Depends(
+        require_viewer
+    ),
+) -> dict[
     str,
     Any,
 ]:
@@ -1402,7 +1431,11 @@ async def telemetry() -> dict[
 
 
 @app.get("/runtime/status")
-async def runtime_status() -> dict[
+async def runtime_status(
+    _principal: ManagementPrincipal = Depends(
+        require_viewer
+    ),
+) -> dict[
     str,
     Any,
 ]:
@@ -1444,7 +1477,11 @@ async def runtime_status() -> dict[
 
 
 @app.post("/runtime/reset")
-async def runtime_reset() -> dict[
+async def runtime_reset(
+    _principal: ManagementPrincipal = Depends(
+        require_admin
+    ),
+) -> dict[
     str,
     str,
 ]:
