@@ -9,4 +9,4 @@ build/
 # Runtime SQLite evidence
 data/*.db
 data/*.db-wal
-data/*.db-shm
+data/*.db-shmfrontend/node_modules/
