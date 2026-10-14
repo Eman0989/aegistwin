@@ -25,6 +25,12 @@ from app.contracts import (
 from app.gateway.runtime_auth import (
     get_runtime_identity,
 )
+from app.providers.commercial_adapter import (
+    CommercialProviderAdapter,
+)
+from app.providers.errors import (
+    ProviderError as RuntimeProviderError,
+)
 
 
 router = APIRouter(
@@ -78,7 +84,7 @@ class RuntimeModelRequest(BaseModel):
 class ProviderRouterProtocol(
     Protocol
 ):
-    """Interface expected from the LLM provider layer."""
+    """Interface required by the commercial gateway."""
 
     async def generate(
         self,
@@ -87,21 +93,51 @@ class ProviderRouterProtocol(
         ...
 
 
-def get_provider_router() -> ProviderRouterProtocol:
-    """Temporary provider dependency.
+commercial_provider_adapter = (
+    CommercialProviderAdapter()
+)
 
-    Emaan's real ProviderRouter will replace
-    this implementation during integration.
-    """
 
-    raise HTTPException(
-        status_code=(
+def get_provider_router(
+) -> ProviderRouterProtocol:
+    """Return the configured commercial provider adapter."""
+
+    return commercial_provider_adapter
+
+
+def _provider_error_status(
+    error: RuntimeProviderError,
+) -> int:
+    """Map provider failures to stable gateway HTTP statuses."""
+
+    if error.code in {
+        "invalid_request",
+        "unsupported_provider",
+        "unsupported_temperature",
+        "streaming_not_supported",
+        "model_not_found",
+    }:
+        return (
+            status.HTTP_400_BAD_REQUEST
+        )
+
+    if error.code == "rate_limited":
+        return (
+            status.HTTP_429_TOO_MANY_REQUESTS
+        )
+
+    if error.code == "provider_timeout":
+        return (
+            status.HTTP_504_GATEWAY_TIMEOUT
+        )
+
+    if error.code == "provider_unavailable":
+        return (
             status.HTTP_503_SERVICE_UNAVAILABLE
-        ),
-        detail=(
-            "LLM provider router is not "
-            "configured yet."
-        ),
+        )
+
+    return (
+        status.HTTP_502_BAD_GATEWAY
     )
 
 
@@ -142,6 +178,25 @@ async def generate_model(
             )
         )
 
+    except RuntimeProviderError as exc:
+        raise HTTPException(
+            status_code=(
+                _provider_error_status(
+                    exc
+                )
+            ),
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "retryable": (
+                    exc.retryable
+                ),
+                "request_id": (
+                    request_id
+                ),
+            },
+        ) from exc
+
     except HTTPException:
         raise
 
@@ -150,10 +205,17 @@ async def generate_model(
             status_code=(
                 status.HTTP_502_BAD_GATEWAY
             ),
-            detail=(
-                "The configured model provider "
-                "failed to process the request."
-            ),
+            detail={
+                "code": "provider_error",
+                "message": (
+                    "The configured model provider "
+                    "failed to process the request."
+                ),
+                "retryable": False,
+                "request_id": (
+                    request_id
+                ),
+            },
         ) from exc
 
     return response
