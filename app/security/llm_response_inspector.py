@@ -19,17 +19,22 @@ class ResponseInspection:
     action: ResponseAction
     content: str | None
     reason: str
+    matched_rules: tuple[str, ...] = ()
+    redaction_count: int = 0
 
 
 def inspect_response(content: str) -> ResponseInspection:
-    """Apply basic deterministic redaction to model text."""
+    """Apply limited deterministic email redaction to model text."""
 
-    if not isinstance(content, str):
+    def block(reason: str) -> ResponseInspection:
         return ResponseInspection(
             action=ResponseAction.BLOCK,
             content=None,
-            reason="Invalid model response content.",
+            reason=reason,
         )
+
+    if not isinstance(content, str):
+        return block("Invalid model response content.")
 
     artifact = DataArtifact(
         artifact_id="llm-response",
@@ -39,31 +44,55 @@ def inspect_response(content: str) -> ResponseInspection:
 
     try:
         result = redact_artifacts([artifact])
-    except (TypeError, ValueError):
-        return ResponseInspection(
-            action=ResponseAction.BLOCK,
-            content=None,
-            reason="Response inspection failed.",
-        )
 
-    if not result.changed:
+        # Validate the redactor's result before using it.
+        if not isinstance(result.changed, bool):
+            return block("Invalid redaction result.")
+
+        if not isinstance(result.artifacts, list):
+            return block("Invalid redaction artifacts.")
+
+        if len(result.artifacts) != 1:
+            return block("Unexpected number of redaction artifacts.")
+
+        sanitized = result.artifacts[0].value
+
+        if not isinstance(sanitized, str):
+            return block("Invalid sanitized content.")
+
+        if not isinstance(result.redacted_value_count, int):
+            return block("Invalid redaction count.")
+
+        if result.changed:
+            if (
+                result.redacted_value_count <= 0
+                or sanitized == content
+            ):
+                return block(
+                    "Required redaction could not be completed."
+                )
+
+            return ResponseInspection(
+                action=ResponseAction.REDACT,
+                content=sanitized,
+                reason="Supported sensitive data was redacted.",
+                matched_rules=("email",),
+                redaction_count=result.redacted_value_count,
+            )
+
+        # An unchanged result must not report redactions
+        # or silently modify the original content.
+        if (
+            result.redacted_value_count != 0
+            or sanitized != content
+        ):
+            return block("Inconsistent redaction result.")
+
         return ResponseInspection(
             action=ResponseAction.ALLOW,
             content=content,
             reason="No supported sensitive-data pattern detected.",
         )
 
-    sanitized = result.artifacts[0].value
-
-    if not isinstance(sanitized, str) or sanitized == content:
-        return ResponseInspection(
-            action=ResponseAction.BLOCK,
-            content=None,
-            reason="Required redaction could not be completed.",
-        )
-
-    return ResponseInspection(
-        action=ResponseAction.REDACT,
-        content=sanitized,
-        reason="Supported sensitive data was redacted.",
-    )
+    except (TypeError, ValueError, IndexError, AttributeError):
+        return block("Response inspection failed.")
