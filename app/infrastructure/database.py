@@ -26,12 +26,15 @@ SessionLocal = sessionmaker(
     autoflush=False
 )
 
+
 class Base(DeclarativeBase):
     pass
+
 
 def get_db():
     with SessionLocal() as session:
         yield session
+
 
 def check_database():
     with engine.connect() as connection:

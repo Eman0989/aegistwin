@@ -22,3 +22,6 @@ data/*.db-wal
 .env.*
 !.env.example
 .venv/
+
+# Docker database secrets
+.env.docker
