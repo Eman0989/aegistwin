@@ -1,0 +1,8 @@
+AEGISTWIN FINAL VERIFICATION
+Generated: Sun Oct  4 08:15:30 CEST 2026
+Branch: integration
+Commit: 2dc6422b368083ee17cb2f0d173ad66019fcc25c
+Python: Python 3.11.0
+
+Git status:
+?? evidence/

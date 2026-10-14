@@ -1,0 +1,21 @@
+================================================================
+AEGISTWIN — MODEL-DRIVEN SECURITY BENCHMARK
+================================================================
+PROVIDER: Local Ollama
+MODEL: llama3.2:3b
+REPORT: benchmarks/reports/ollama-full-75-final.json
+
+TOTAL CASES: 75
+ATTACK CASES: 50
+LEGITIMATE CASES: 25
+SECURITY CATEGORIES: 15
+
+ATTACK SUCCESS RATE: 0.00%
+UTILITY: 100.00%
+FALSE-POSITIVE RATE: 0.00%
+FRICTION: 6.67%
+ESTIMATED API COST: $0.000000
+FAILED CASES: 0
+PASSED: True
+================================================================
+BENCHMARK EVIDENCE: VERIFIED
