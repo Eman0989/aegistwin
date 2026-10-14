@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -41,24 +40,61 @@ def create_request(
         return request.id
 
 
-def complete_request(request_id, status, latency):
+def complete_request(
+    request_id,
+    tenant_id,
+    status,
+    latency=None,
+    *,
+    input_tokens=None,
+    output_tokens=None,
+    estimated_cost=None,
+    error_code=None,
+):
+    from decimal import Decimal
+
     with SessionLocal() as db:
-        request = db.get(AgentRequest, request_id)
+        request = db.execute(
+            select(AgentRequest).where(
+                AgentRequest.id == request_id,
+                AgentRequest.tenant_id == tenant_id,
+            )
+        ).scalar_one_or_none()
 
         if request is None:
-            raise ValueError("Request not found")
+            raise ValueError("Request not found for tenant")
+
+        if latency is not None and latency < 0:
+            raise ValueError("Latency must be non-negative")
+
+        for value in (input_tokens, output_tokens):
+            if value is not None and value < 0:
+                raise ValueError("Token counts must be non-negative")
 
         request.status = status
-        request.latency = latency
+        request.latency = latency  # milliseconds
+        request.input_tokens = input_tokens
+        request.output_tokens = output_tokens
+        request.estimated_cost = (
+            Decimal(str(estimated_cost))
+            if estimated_cost is not None
+            else None
+        )
+        request.error_code = error_code
         request.completed_at = datetime.now(timezone.utc)
 
         db.commit()
         return request.id
 
 
-def get_request(request_id):
+def get_request(request_id, tenant_id):
     with SessionLocal() as db:
-        request = db.get(AgentRequest, request_id)
+        request = db.execute(
+            select(AgentRequest).where(
+                AgentRequest.id == request_id,
+                AgentRequest.tenant_id == tenant_id,
+            )
+        ).scalar_one_or_none()
 
         if request is None:
             return None
@@ -72,4 +108,13 @@ def get_request(request_id):
             "model": request.model,
             "status": request.status,
             "latency": request.latency,
+            "latency_ms": request.latency,
+            "input_tokens": request.input_tokens,
+            "output_tokens": request.output_tokens,
+            "estimated_cost": (
+                str(request.estimated_cost)
+                if request.estimated_cost is not None
+                else None
+            ),
+            "error_code": request.error_code,
         }

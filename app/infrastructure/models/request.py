@@ -1,7 +1,8 @@
+from decimal import Decimal
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, String, Integer, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database import Base
@@ -36,4 +37,17 @@ class AgentRequest(Base):
     )
     latency: Mapped[float | None] = mapped_column(
         Float, nullable=True
+    )
+
+    input_tokens: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    output_tokens: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    estimated_cost: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8), nullable=True
+    )
+    error_code: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
     )

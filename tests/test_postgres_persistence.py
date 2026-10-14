@@ -48,11 +48,15 @@ def main():
 
     complete_request(
         request_id=request_id,
+        tenant_id=tenant_id,
         status="completed",
         latency=125.5,
+        input_tokens=120,
+        output_tokens=80,
+        estimated_cost="0.00025000",
     )
 
-    saved = get_request(request_id)
+    saved = get_request(request_id, tenant_id)
 
     assert saved is not None
     assert saved["status"] == "completed"
