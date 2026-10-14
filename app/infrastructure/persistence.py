@@ -3,11 +3,21 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 
 from app.infrastructure.database import SessionLocal
-from app.infrastructure.models import AgentSession, AgentRequest
+from app.infrastructure.models import AgentSession, AgentRequest, Agent
 
 
 def create_session(tenant_id, agent_id):
     with SessionLocal() as db:
+        agent = db.execute(
+            select(Agent).where(
+                Agent.id == agent_id,
+                Agent.tenant_id == tenant_id,
+            )
+        ).scalar_one_or_none()
+
+        if agent is None:
+            raise ValueError("Agent not found for tenant")
+
         session = AgentSession(
             tenant_id=tenant_id,
             agent_id=agent_id,
@@ -26,6 +36,27 @@ def create_request(
     model,
 ):
     with SessionLocal() as db:
+        session = db.execute(
+            select(AgentSession).where(
+                AgentSession.id == session_id,
+                AgentSession.tenant_id == tenant_id,
+                AgentSession.agent_id == agent_id,
+            )
+        ).scalar_one_or_none()
+
+        if session is None:
+            raise ValueError("Session not found for tenant and agent")
+
+        agent = db.execute(
+            select(Agent).where(
+                Agent.id == agent_id,
+                Agent.tenant_id == tenant_id,
+            )
+        ).scalar_one_or_none()
+
+        if agent is None:
+            raise ValueError("Agent not found for tenant")
+
         request = AgentRequest(
             tenant_id=tenant_id,
             agent_id=agent_id,
