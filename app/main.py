@@ -5,12 +5,7 @@ from time import perf_counter
 from typing import Any
 
 import yaml
-from fastapi import (
-    Depends,
-    FastAPI,
-    HTTPException,
-    Response,
-)
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -23,16 +18,14 @@ from app.auth import (
     require_security,
     require_viewer,
 )
-from app.contracts import (
-    DataArtifact,
-    ToolCall,
-)
-from app.controls.approvals import (
-    ApprovalManager,
-    ApprovalStatus,
-)
+from app.contracts import DataArtifact, ToolCall
+from app.controls.approvals import ApprovalManager, ApprovalStatus
 from app.controls.budget import BudgetManager
 from app.controls.policy import PolicyEngine
+
+# New commercial runtime router
+from app.gateway.routes import router as runtime_router
+
 from app.gateway.service import Gateway
 from app.persistence.sqlite_store import (
     DEFAULT_SQLITE_PATH,
@@ -43,30 +36,18 @@ from app.policy_config import (
     AegisPolicyConfig,
     load_policy_config,
 )
-from app.security.benchmark import (
-    build_benchmark_report,
-)
-from app.security.benchmark_suite import (
-    run_extended_benchmark,
-)
-from app.security.replay import (
-    run_attack_repair_replay,
-)
-from app.security.semantic import (
-    HybridSemanticDetector,
-)
+from app.security.benchmark import build_benchmark_report
+from app.security.benchmark_suite import run_extended_benchmark
+from app.security.replay import run_attack_repair_replay
+from app.security.semantic import HybridSemanticDetector
 from app.telemetry import RuntimeTelemetry
-from app.twin.api_analysis import (
-    build_twin_analysis,
-)
+from app.twin.api_analysis import build_twin_analysis
 
 
 class GatewayEvaluationRequest(BaseModel):
     call: ToolCall
 
-    input_artifacts: list[
-        DataArtifact
-    ] = Field(
+    input_artifacts: list[DataArtifact] = Field(
         default_factory=list
     )
 
@@ -98,6 +79,13 @@ app.add_middleware(
 )
 
 
+# Adds:
+# POST /v1/model/generate
+app.include_router(
+    runtime_router
+)
+
+
 POLICY_PATH = DEFAULT_POLICY_PATH
 
 PUBLIC_POLICY_SOURCE = (
@@ -108,23 +96,19 @@ _policy_reload_lock = Lock()
 
 _policy_reload_count = 0
 
-_last_policy_reload_at: (
-    str | None
-) = None
+_last_policy_reload_at: str | None = None
 
 
 store = SQLiteEvidenceStore(
     DEFAULT_SQLITE_PATH
 )
 
-runtime_telemetry = (
-    RuntimeTelemetry()
-)
+runtime_telemetry = RuntimeTelemetry()
 
 audit_log = AuditLog()
 
-approval_manager = (
-    ApprovalManager(store)
+approval_manager = ApprovalManager(
+    store
 )
 
 
@@ -133,47 +117,35 @@ budget_manager = BudgetManager(
         runtime_config.MAX_TOOL_CALLS
     ),
     max_external_http_calls=(
-        runtime_config
-        .MAX_EXTERNAL_HTTP_CALLS
+        runtime_config.MAX_EXTERNAL_HTTP_CALLS
     ),
     max_estimated_cost=(
-        runtime_config
-        .MAX_ESTIMATED_COST
+        runtime_config.MAX_ESTIMATED_COST
     ),
     max_agent_turns=(
-        runtime_config
-        .MAX_AGENT_TURNS
+        runtime_config.MAX_AGENT_TURNS
     ),
     max_input_tokens=(
-        runtime_config
-        .MAX_INPUT_TOKENS
+        runtime_config.MAX_INPUT_TOKENS
     ),
     max_output_tokens=(
-        runtime_config
-        .MAX_OUTPUT_TOKENS
+        runtime_config.MAX_OUTPUT_TOKENS
     ),
     max_execution_duration_ms=(
-        runtime_config
-        .MAX_EXECUTION_DURATION_MS
+        runtime_config.MAX_EXECUTION_DURATION_MS
     ),
     max_model_runtime_ms=(
-        runtime_config
-        .MAX_MODEL_RUNTIME_MS
+        runtime_config.MAX_MODEL_RUNTIME_MS
     ),
 )
 
 
-runtime_policy_engine = (
-    PolicyEngine()
-)
+runtime_policy_engine = PolicyEngine()
 
 
-semantic_detector = (
-    HybridSemanticDetector(
-        threshold=(
-            runtime_config
-            .SEMANTIC_THRESHOLD
-        ),
+semantic_detector = HybridSemanticDetector(
+    threshold=(
+        runtime_config.SEMANTIC_THRESHOLD
     )
 )
 
@@ -277,8 +249,7 @@ def _apply_runtime_policy(
 
     previous_budget_limits = {
         "max_tool_calls": (
-            budget_manager
-            .max_tool_calls
+            budget_manager.max_tool_calls
         ),
         "max_external_http_calls": (
             budget_manager
@@ -576,6 +547,7 @@ async def reload_policy(
                     POLICY_PATH
                 )
             )
+
         except (
             FileNotFoundError,
             ValueError,
@@ -603,6 +575,7 @@ async def reload_policy(
             _apply_runtime_policy(
                 candidate
             )
+
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
@@ -840,9 +813,7 @@ async def evaluate_gateway(
     str,
     Any,
 ]:
-    started = (
-        perf_counter()
-    )
+    started = perf_counter()
 
     decision, receipt = (
         await production_gateway.process(
