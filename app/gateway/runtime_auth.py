@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import re
 from uuid import uuid4
 
 from fastapi import Header, HTTPException, status
@@ -48,6 +49,7 @@ async def get_runtime_identity(
         RUNTIME_API_KEY_ENV
     )
 
+    # Validate the API key.
     if (
         x_aegis_api_key is None
         or not x_aegis_api_key.strip()
@@ -58,18 +60,33 @@ async def get_runtime_identity(
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="A valid AegisTwin runtime API key is required.",
+            detail=(
+                "A valid AegisTwin runtime API key "
+                "is required."
+            ),
             headers={
                 "WWW-Authenticate": "ApiKey"
             },
         )
 
+    # Generate a new session ID if one was not provided.
     session_id = (
         x_aegis_session_id.strip()
         if x_aegis_session_id
         and x_aegis_session_id.strip()
         else f"SES-{uuid4().hex[:12]}"
     )
+
+    # SECURITY: Validate session ID format and length.
+    # This does not verify tenant or agent ownership.
+    if not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,128}",
+        session_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid AegisTwin session ID.",
+        )
 
     return TrustedIdentityContext(
         tenant_id=_required_env(

@@ -81,9 +81,7 @@ class RuntimeModelRequest(BaseModel):
     )
 
 
-class ProviderRouterProtocol(
-    Protocol
-):
+class ProviderRouterProtocol(Protocol):
     """Interface required by the commercial gateway."""
 
     async def generate(
@@ -93,13 +91,10 @@ class ProviderRouterProtocol(
         ...
 
 
-commercial_provider_adapter = (
-    CommercialProviderAdapter()
-)
+commercial_provider_adapter = CommercialProviderAdapter()
 
 
-def get_provider_router(
-) -> ProviderRouterProtocol:
+def get_provider_router() -> ProviderRouterProtocol:
     """Return the configured commercial provider adapter."""
 
     return commercial_provider_adapter
@@ -117,29 +112,72 @@ def _provider_error_status(
         "streaming_not_supported",
         "model_not_found",
     }:
-        return (
-            status.HTTP_400_BAD_REQUEST
-        )
+        return status.HTTP_400_BAD_REQUEST
 
     if error.code == "rate_limited":
-        return (
-            status.HTTP_429_TOO_MANY_REQUESTS
-        )
+        return status.HTTP_429_TOO_MANY_REQUESTS
 
     if error.code == "provider_timeout":
-        return (
-            status.HTTP_504_GATEWAY_TIMEOUT
-        )
+        return status.HTTP_504_GATEWAY_TIMEOUT
 
     if error.code == "provider_unavailable":
-        return (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        return status.HTTP_503_SERVICE_UNAVAILABLE
 
-    return (
-        status.HTTP_502_BAD_GATEWAY
-    )
+    return status.HTTP_502_BAD_GATEWAY
 
+
+# ==================================================
+# SECURITY: SAFE PUBLIC PROVIDER ERROR MESSAGES
+# ==================================================
+
+SAFE_PROVIDER_ERROR_MESSAGES = {
+    "invalid_request": (
+        "The model request is invalid."
+    ),
+    "unsupported_provider": (
+        "The requested provider is unsupported."
+    ),
+    "unsupported_temperature": (
+        "The temperature setting is unsupported."
+    ),
+    "streaming_not_supported": (
+        "Streaming is not supported."
+    ),
+    "model_not_found": (
+        "The requested model was not found."
+    ),
+    "rate_limited": (
+        "The model provider rate limit was reached."
+    ),
+    "provider_timeout": (
+        "The model provider timed out."
+    ),
+    "provider_unavailable": (
+        "The model provider is unavailable."
+    ),
+    "invalid_credentials": (
+        "Model provider authentication failed."
+    ),
+}
+
+DEFAULT_PROVIDER_ERROR_MESSAGE = (
+    "The configured model provider failed "
+    "to process the request."
+)
+
+
+def _safe_provider_error_code(code: str) -> str:
+    """Do not expose unknown provider-defined error codes."""
+
+    if code in SAFE_PROVIDER_ERROR_MESSAGES:
+        return code
+
+    return "provider_error"
+
+
+# ==================================================
+# AUTHENTICATED MODEL GENERATION
+# ==================================================
 
 @router.post(
     "/generate",
@@ -156,9 +194,7 @@ async def generate_model(
 ) -> ModelResponse:
     """Send one authenticated model request through AegisTwin."""
 
-    request_id = (
-        f"REQ-{uuid4().hex[:12]}"
-    )
+    request_id = f"REQ-{uuid4().hex[:12]}"
 
     model_request = ModelRequest(
         request_id=request_id,
@@ -172,28 +208,27 @@ async def generate_model(
     )
 
     try:
-        response = (
-            await provider_router.generate(
-                model_request
-            )
+        response = await provider_router.generate(
+            model_request
         )
 
     except RuntimeProviderError as exc:
+        # Never return str(exc): a provider exception
+        # could contain an API key or other secret.
+        public_code = _safe_provider_error_code(
+            exc.code
+        )
+
         raise HTTPException(
-            status_code=(
-                _provider_error_status(
-                    exc
-                )
-            ),
+            status_code=_provider_error_status(exc),
             detail={
-                "code": exc.code,
-                "message": str(exc),
-                "retryable": (
-                    exc.retryable
+                "code": public_code,
+                "message": SAFE_PROVIDER_ERROR_MESSAGES.get(
+                    public_code,
+                    DEFAULT_PROVIDER_ERROR_MESSAGE,
                 ),
-                "request_id": (
-                    request_id
-                ),
+                "retryable": exc.retryable,
+                "request_id": request_id,
             },
         ) from exc
 
@@ -202,19 +237,12 @@ async def generate_model(
 
     except Exception as exc:
         raise HTTPException(
-            status_code=(
-                status.HTTP_502_BAD_GATEWAY
-            ),
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
                 "code": "provider_error",
-                "message": (
-                    "The configured model provider "
-                    "failed to process the request."
-                ),
+                "message": DEFAULT_PROVIDER_ERROR_MESSAGE,
                 "retryable": False,
-                "request_id": (
-                    request_id
-                ),
+                "request_id": request_id,
             },
         ) from exc
 
