@@ -246,3 +246,96 @@ class WorkflowResult(BaseModel):
 
     attack_path: AttackPath | None = None
     message: str
+
+
+class TrustedIdentityContext(BaseModel):
+    """Server-verified identity for one runtime request.
+
+    This object must be created by AegisTwin authentication,
+    never trusted directly from agent-supplied JSON.
+    """
+
+    tenant_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    agent_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+
+    permissions: set[str] = Field(
+        default_factory=set
+    )
+
+    credential_source: str = Field(
+        default="api_key",
+        min_length=1,
+    )
+
+
+class ModelRequest(BaseModel):
+    """Normalized request passed from Gateway to ProviderRouter."""
+
+    request_id: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+
+    messages: list[
+        dict[str, Any]
+    ] = Field(
+        default_factory=list
+    )
+
+    temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+    )
+
+    stream: bool = False
+
+    trusted_context: TrustedIdentityContext
+
+    metadata: dict[
+        str,
+        Any,
+    ] = Field(
+        default_factory=dict
+    )
+
+
+class ModelResponse(BaseModel):
+    """Normalized response returned by every LLM provider."""
+
+    request_id: str
+    provider: str
+    model: str
+
+    content: str = ""
+
+    tool_calls: list[
+        dict[str, Any]
+    ] = Field(
+        default_factory=list
+    )
+
+    usage: dict[
+        str,
+        Any,
+    ] = Field(
+        default_factory=dict
+    )
+
+    finish_reason: str | None = None
+
+    latency_ms: float = Field(
+        default=0.0,
+        ge=0.0,
+    )
+
+
+class ProviderError(BaseModel):
+    """Normalized provider failure returned to the gateway."""
+
+    request_id: str
+    provider: str
+    code: str
+    message: str
+    retryable: bool = False
