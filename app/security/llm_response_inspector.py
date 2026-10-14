@@ -33,6 +33,7 @@ def inspect_response(content: str) -> ResponseInspection:
             reason=reason,
         )
 
+    # Reject invalid response content.
     if not isinstance(content, str):
         return block("Invalid model response content.")
 
@@ -45,24 +46,35 @@ def inspect_response(content: str) -> ResponseInspection:
     try:
         result = redact_artifacts([artifact])
 
-        # Validate the redactor's result before using it.
+        # Check that the changed flag is a real boolean.
         if not isinstance(result.changed, bool):
             return block("Invalid redaction result.")
 
+        # Verify that artifacts are returned as a list.
         if not isinstance(result.artifacts, list):
             return block("Invalid redaction artifacts.")
 
+        # We expect exactly one sanitized artifact.
         if len(result.artifacts) != 1:
-            return block("Unexpected number of redaction artifacts.")
+            return block(
+                "Unexpected number of redaction artifacts."
+            )
 
         sanitized = result.artifacts[0].value
 
+        # Verify the sanitized content is valid text.
         if not isinstance(sanitized, str):
             return block("Invalid sanitized content.")
 
-        if not isinstance(result.redacted_value_count, int):
+        # Reject invalid counts, including True and False.
+        # Python treats bool as a subclass of int.
+        if (
+            not isinstance(result.redacted_value_count, int)
+            or isinstance(result.redacted_value_count, bool)
+        ):
             return block("Invalid redaction count.")
 
+        # If redaction occurred, verify it actually worked.
         if result.changed:
             if (
                 result.redacted_value_count <= 0
@@ -80,8 +92,8 @@ def inspect_response(content: str) -> ResponseInspection:
                 redaction_count=result.redacted_value_count,
             )
 
-        # An unchanged result must not report redactions
-        # or silently modify the original content.
+        # No redaction occurred.
+        # Reject inconsistent or unexpected modifications.
         if (
             result.redacted_value_count != 0
             or sanitized != content
@@ -92,7 +104,14 @@ def inspect_response(content: str) -> ResponseInspection:
             action=ResponseAction.ALLOW,
             content=content,
             reason="No supported sensitive-data pattern detected.",
+            matched_rules=(),
+            redaction_count=0,
         )
 
-    except (TypeError, ValueError, IndexError, AttributeError):
+    except (
+        TypeError,
+        ValueError,
+        IndexError,
+        AttributeError,
+    ):
         return block("Response inspection failed.")

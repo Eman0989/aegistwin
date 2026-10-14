@@ -170,3 +170,23 @@ def test_allows_empty_string():
     assert result.content == ""
     assert result.matched_rules == ()
     assert result.redaction_count == 0
+
+def test_blocks_boolean_redaction_count():
+    fake_result = Mock()
+    fake_result.changed = True
+    fake_result.redacted_value_count = True
+    fake_result.artifacts = [
+        Mock(value="[REDACTED]")
+    ]
+
+    with patch(
+        "app.security.llm_response_inspector.redact_artifacts",
+        return_value=fake_result,
+    ):
+        result = inspect_response(
+            "Contact example@company.com"
+        )
+
+    assert result.action == ResponseAction.BLOCK
+    assert result.content is None
+    assert result.redaction_count == 0
