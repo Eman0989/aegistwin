@@ -357,3 +357,158 @@ async def test_invalid_usage_metrics_prevent_success(setup_orchestrator):
         )
 
     assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,incorrect_value",
+    [
+        ("provider", "unexpected-provider"),
+        ("model", "unexpected-model"),
+    ],
+)
+async def test_mismatched_provider_metadata_is_blocked(
+    setup_orchestrator,
+    field,
+    incorrect_value,
+):
+    ctx = setup_orchestrator
+
+    response = make_response(ctx["request"]).model_copy(
+        update={field: incorrect_value}
+    )
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(return_value=response)
+
+    with pytest.raises(ResponseBlockedError):
+        await run_postgres_inference(
+            model_request=ctx["request"],
+            provider_router=provider,
+            db=ctx["db"],
+            requested_session_id=None,
+        )
+
+    assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_invalid_redacted_content_is_blocked(
+    setup_orchestrator,
+):
+    ctx = setup_orchestrator
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(
+        return_value=make_response(ctx["request"])
+    )
+
+    with patch(
+        "app.gateway.postgres_orchestrator.inspect_response",
+        return_value=ResponseInspection(
+            action=ResponseAction.REDACT,
+            content=None,
+            reason="Invalid redaction.",
+        ),
+    ):
+        with pytest.raises(ResponseBlockedError):
+            await run_postgres_inference(
+                model_request=ctx["request"],
+                provider_router=provider,
+                db=ctx["db"],
+                requested_session_id=None,
+            )
+
+    assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_unknown_inspection_action_is_blocked(
+    setup_orchestrator,
+):
+    ctx = setup_orchestrator
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(
+        return_value=make_response(ctx["request"])
+    )
+
+    with patch(
+        "app.gateway.postgres_orchestrator.inspect_response",
+        return_value=ResponseInspection(
+            action="UNKNOWN",
+            content="Safe model response.",
+            reason="Invalid action.",
+        ),
+    ):
+        with pytest.raises(ResponseBlockedError):
+            await run_postgres_inference(
+                model_request=ctx["request"],
+                provider_router=provider,
+                db=ctx["db"],
+                requested_session_id=None,
+            )
+
+    assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_value",
+    [True, -1, 1.5, "7"],
+)
+async def test_invalid_token_types_are_blocked(
+    setup_orchestrator,
+    invalid_value,
+):
+    ctx = setup_orchestrator
+
+    response = make_response(ctx["request"]).model_copy(
+        update={
+            "usage": {
+                "input_tokens": invalid_value,
+                "output_tokens": 7,
+            }
+        }
+    )
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(return_value=response)
+
+    with pytest.raises(ResponseBlockedError):
+        await run_postgres_inference(
+            model_request=ctx["request"],
+            provider_router=provider,
+            db=ctx["db"],
+            requested_session_id=None,
+        )
+
+    assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_latency",
+    [float("nan"), float("inf"), float("-inf"), -1.0, True],
+)
+async def test_invalid_latency_is_blocked(
+    setup_orchestrator,
+    invalid_latency,
+):
+    ctx = setup_orchestrator
+
+    response = make_response(ctx["request"]).model_copy(
+        update={"latency_ms": invalid_latency}
+    )
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(return_value=response)
+
+    with pytest.raises(ResponseBlockedError):
+        await run_postgres_inference(
+            model_request=ctx["request"],
+            provider_router=provider,
+            db=ctx["db"],
+            requested_session_id=None,
+        )
+
+    assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
