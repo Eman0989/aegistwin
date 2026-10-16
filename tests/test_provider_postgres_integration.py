@@ -13,7 +13,6 @@ from app.providers.errors import ProviderError
 # 1. OPTIONAL INTEGRATION TEST CONFIGURATION
 # ==================================================
 
-# These tests run only when explicitly enabled.
 RUN_INTEGRATION = (
     os.getenv("RUN_POSTGRES_INTEGRATION") == "1"
 )
@@ -33,8 +32,8 @@ pytestmark = pytest.mark.skipif(
 
 def verify_test_database():
     """
-    Ensure tests use only the local PostgreSQL
-    test database, never the normal database.
+    Ensure integration tests use only the local
+    PostgreSQL test database.
     """
 
     if os.getenv("DB_NAME") != "aegistwin_test_db":
@@ -42,7 +41,8 @@ def verify_test_database():
             "Refusing to use a non-test database."
         )
 
-    # Import only after checking DB_NAME.
+    # Import the configured database URL only
+    # after checking the database name.
     from app.infrastructure.database import DATABASE_URL
 
     if DATABASE_URL.database != "aegistwin_test_db":
@@ -71,16 +71,15 @@ def verify_test_database():
 @pytest.fixture
 def test_request():
     """
-    Create a tenant, agent, session and request.
+    Create a temporary tenant, agent, session,
+    and request.
 
-    After the test, automatically delete only
-    the records created by this fixture.
+    Automatically remove records created by
+    this fixture after each test.
     """
 
-    # Check safety before accessing the database.
     verify_test_database()
 
-    # Import database code only when test runs.
     from app.infrastructure.database import SessionLocal
 
     from app.infrastructure.models import (
@@ -103,10 +102,8 @@ def test_request():
     request_id = None
 
     try:
-
-        # STEP 1: Create test tenant and agent.
+        # STEP 1: Create the test tenant and agent.
         with SessionLocal() as db:
-
             tenant = Tenant(
                 name=f"Integration Test {test_id}"
             )
@@ -127,13 +124,14 @@ def test_request():
 
             db.commit()
 
-        # STEP 2: Create test session.
+        # STEP 2: Create a session belonging
+        # to the test tenant and agent.
         session_id = create_session(
             tenant_id=tenant_id,
             agent_id=agent_id,
         )
 
-        # STEP 3: Create pending AI request.
+        # STEP 3: Create a pending model request.
         request_id = create_request(
             tenant_id=tenant_id,
             agent_id=agent_id,
@@ -142,19 +140,19 @@ def test_request():
             model="llama3.2:3b",
         )
 
-        # STEP 4: Give the request ID to the test.
-        yield request_id
+        # STEP 4: Return both identifiers.
+        # Vishnu's updated API requires tenant_id.
+        yield {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+        }
 
     finally:
-
-        # STEP 5: Clean up test records.
-        # Runs even if the test fails.
-
+        # STEP 5: Delete test records in reverse
+        # dependency order, even if the test fails.
         with SessionLocal() as db:
 
-            # Delete request.
             if request_id is not None:
-
                 request = db.get(
                     AgentRequest,
                     request_id,
@@ -164,9 +162,7 @@ def test_request():
                     db.delete(request)
                     db.flush()
 
-            # Delete session.
             if session_id is not None:
-
                 session = db.get(
                     AgentSession,
                     session_id,
@@ -176,9 +172,7 @@ def test_request():
                     db.delete(session)
                     db.flush()
 
-            # Delete agent.
             if agent_id is not None:
-
                 agent = db.get(
                     Agent,
                     agent_id,
@@ -188,9 +182,7 @@ def test_request():
                     db.delete(agent)
                     db.flush()
 
-            # Delete tenant.
             if tenant_id is not None:
-
                 tenant = db.get(
                     Tenant,
                     tenant_id,
@@ -209,22 +201,21 @@ def test_request():
 @pytest.mark.asyncio
 async def test_real_ollama_request(test_request):
     """
-    Send a real AI request through ProviderRouter.
-
-    Verify PostgreSQL records successful execution
-    and the actual model latency.
+    Send a real request through ProviderRouter
+    and verify PostgreSQL records the result.
     """
 
-    # Database imports happen only inside enabled tests.
     from app.infrastructure.persistence import (
         complete_request,
         get_request,
     )
 
+    request_id = test_request["request_id"]
+    tenant_id = test_request["tenant_id"]
+
     router = ProviderRouter()
 
     try:
-
         result = await router.generate(
             provider="ollama",
             messages=[
@@ -238,43 +229,53 @@ async def test_real_ollama_request(test_request):
         )
 
     except Exception:
-
-        # Record failed request if Ollama fails.
+        # Record the failure against the
+        # authenticated test tenant.
         complete_request(
-            request_id=test_request,
+            request_id=request_id,
+            tenant_id=tenant_id,
             status="failed",
             latency=0.0,
         )
 
         raise
 
-    # Record successful request.
+    # Record actual provider results.
     complete_request(
-        request_id=test_request,
+        request_id=request_id,
+        tenant_id=tenant_id,
         status="completed",
         latency=result.model_latency_ms,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
     )
 
-    # Retrieve the database record.
-    saved = get_request(test_request)
+    # Retrieve the saved record with tenant scope.
+    saved = get_request(
+        request_id=request_id,
+        tenant_id=tenant_id,
+    )
 
-    # Verify AI output.
+    # Verify real LLM output.
     assert result.content.strip()
     assert result.model_name
 
-    # Verify PostgreSQL record.
+    # Verify database persistence.
     assert saved is not None
+    assert saved["tenant_id"] == str(tenant_id)
     assert saved["status"] == "completed"
     assert saved["provider"] == "ollama"
     assert saved["model"] == "llama3.2:3b"
     assert saved["latency"] is not None
     assert saved["latency"] >= 0
+    assert saved["input_tokens"] == result.input_tokens
+    assert saved["output_tokens"] == result.output_tokens
 
     print("\nREAL OLLAMA TEST PASSED")
     print("AI response:", result.content)
     print("Model:", result.model_name)
-    print("Input tokens:", result.input_tokens)
-    print("Output tokens:", result.output_tokens)
+    print("Input tokens:", saved["input_tokens"])
+    print("Output tokens:", saved["output_tokens"])
     print("Latency:", saved["latency"], "ms")
 
 
@@ -285,9 +286,8 @@ async def test_real_ollama_request(test_request):
 @pytest.mark.asyncio
 async def test_failed_provider_request(test_request):
     """
-    Simulate an unavailable provider.
-
-    Confirm PostgreSQL records the failed status.
+    Simulate provider unavailability and verify
+    PostgreSQL records the failure.
     """
 
     from app.infrastructure.persistence import (
@@ -295,11 +295,11 @@ async def test_failed_provider_request(test_request):
         get_request,
     )
 
-    # Simulated provider failure.
+    request_id = test_request["request_id"]
+    tenant_id = test_request["tenant_id"]
+
     class FailingRouter:
-
         async def generate(self, provider, messages):
-
             raise ProviderError(
                 "Simulated provider outage",
                 code="provider_unavailable",
@@ -309,9 +309,7 @@ async def test_failed_provider_request(test_request):
     router = FailingRouter()
 
     with pytest.raises(ProviderError) as error:
-
         try:
-
             await router.generate(
                 provider="ollama",
                 messages=[
@@ -322,29 +320,35 @@ async def test_failed_provider_request(test_request):
                 ],
             )
 
-        except ProviderError:
-
-            # Save failed request in PostgreSQL.
+        except ProviderError as exc:
+            # Persist provider failure with tenant scope.
             complete_request(
-                request_id=test_request,
+                request_id=request_id,
+                tenant_id=tenant_id,
                 status="failed",
                 latency=0.0,
+                error_code=exc.code,
             )
 
             raise
 
-    # Retrieve stored record.
-    saved = get_request(test_request)
+    # Retrieve the stored failure.
+    saved = get_request(
+        request_id=request_id,
+        tenant_id=tenant_id,
+    )
 
-    # Verify error handling.
+    # Verify exception information.
     assert error.value.code == "provider_unavailable"
     assert error.value.retryable is True
 
-    # Verify database state.
+    # Verify persisted failure.
     assert saved is not None
+    assert saved["tenant_id"] == str(tenant_id)
     assert saved["status"] == "failed"
     assert saved["provider"] == "ollama"
     assert saved["latency"] == 0.0
+    assert saved["error_code"] == "provider_unavailable"
 
     print("\nPROVIDER FAILURE TEST PASSED")
     print("Error:", error.value.code)
