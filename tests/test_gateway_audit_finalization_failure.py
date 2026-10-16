@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.contracts import ModelResponse
 from app.gateway.routes import get_provider_router
+from app.gateway.postgres_request_lifecycle import PersistedRequest
 from app.gateway.postgres_session_manager import ManagedSession
 from app.main import app
 
@@ -89,6 +90,11 @@ def send_request(client):
     )
 
 
+# ==========================================================
+# TEST 1 — DATABASE FAILURE DURING FINALIZATION
+# ==========================================================
+
+
 def test_finalization_database_failure_returns_safe_503(
     runtime_client,
 ):
@@ -98,6 +104,16 @@ def test_finalization_database_failure_returns_safe_503(
 
     db = MagicMock()
     session_id = uuid4()
+
+    # Use a real dataclass, not MagicMock.
+    # attach_lease() needs a valid PersistedRequest.
+    persisted = PersistedRequest(
+        request_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=session_id,
+        public_request_id="REQ-test123",
+    )
 
     def manage_session(*, identity, db, requested_session_id):
         return ManagedSession(
@@ -126,8 +142,13 @@ def test_finalization_database_failure_returns_safe_503(
         patch(
             "app.gateway.postgres_orchestrator."
             "start_request",
-            return_value=MagicMock(),
+            return_value=persisted,
         ),
+        patch(
+            "app.gateway.postgres_orchestrator."
+            "acquire_request_lease",
+            return_value="test-audit-lease-token",
+        ) as acquire,
         patch(
             "app.gateway.postgres_orchestrator."
             "finish_request",
@@ -167,12 +188,28 @@ def test_finalization_database_failure_returns_safe_503(
     assert SECRET_DATABASE_ERROR not in response.text
     assert "UPDATE requests" not in response.text
 
+    # The provider was called before audit finalization failed.
     provider.generate.assert_awaited_once()
+
+    # The gateway acquired a lease.
+    acquire.assert_called_once()
+
+    # Finalization was attempted.
     finish.assert_called_once()
     assert finish.call_args.kwargs["outcome"] == "completed"
 
+    # Verify that the token was attached to the request.
+    finalized_request = finish.call_args.kwargs["request"]
+    assert finalized_request.lease_token == "test-audit-lease-token"
+    assert finalized_request.request_id == persisted.request_id
+
     # Pending audit was committed before inference.
     db.commit.assert_called_once()
+
+
+# ==========================================================
+# TEST 2 — UNEXPECTED FAILURE DURING FINALIZATION
+# ==========================================================
 
 
 def test_unexpected_finalization_error_returns_safe_503(
@@ -184,6 +221,15 @@ def test_unexpected_finalization_error_returns_safe_503(
 
     db = MagicMock()
     session_id = uuid4()
+
+    # Real PersistedRequest required for lease attachment.
+    persisted = PersistedRequest(
+        request_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=session_id,
+        public_request_id="REQ-test123",
+    )
 
     def manage_session(*, identity, db, requested_session_id):
         return ManagedSession(
@@ -206,8 +252,13 @@ def test_unexpected_finalization_error_returns_safe_503(
         patch(
             "app.gateway.postgres_orchestrator."
             "start_request",
-            return_value=MagicMock(),
+            return_value=persisted,
         ),
+        patch(
+            "app.gateway.postgres_orchestrator."
+            "acquire_request_lease",
+            return_value="test-audit-lease-token",
+        ) as acquire,
         patch(
             "app.gateway.postgres_orchestrator."
             "finish_request",
@@ -244,5 +295,13 @@ def test_unexpected_finalization_error_returns_safe_503(
     assert SECRET_DATABASE_ERROR not in response.text
 
     provider.generate.assert_awaited_once()
+    acquire.assert_called_once()
     finish.assert_called_once()
+
+    assert finish.call_args.kwargs["outcome"] == "completed"
+    assert (
+        finish.call_args.kwargs["request"].lease_token
+        == "test-audit-lease-token"
+    )
+
     db.commit.assert_called_once()

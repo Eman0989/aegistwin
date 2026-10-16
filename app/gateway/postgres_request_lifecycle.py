@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -37,6 +37,10 @@ ALLOWED_ERROR_CODES = {
 }
 
 
+class RequestFinalizationError(RuntimeError):
+    """A pending request could not be safely finalized."""
+
+
 @dataclass(frozen=True)
 class PersistedRequest:
     request_id: UUID
@@ -44,6 +48,22 @@ class PersistedRequest:
     agent_id: UUID
     session_id: UUID
     public_request_id: str
+    lease_token: str | None = None
+
+
+def attach_lease(
+    request: PersistedRequest,
+    lease_token: str,
+) -> PersistedRequest:
+    """Associate an acquired lease with the persisted request."""
+
+    if not isinstance(lease_token, str) or not lease_token:
+        raise ValueError("Invalid request lease token.")
+
+    return replace(
+        request,
+        lease_token=lease_token,
+    )
 
 
 def start_request(
@@ -54,9 +74,10 @@ def start_request(
     model: str,
     db: Session,
 ) -> PersistedRequest:
-    """Authorize and insert a pending request in one transaction.
+    """Authorize and insert a pending request.
 
-    The caller owns the transaction and must commit before inference.
+    The caller must commit the transaction before
+    starting provider inference.
     """
 
     resolved = resolve_existing_session(
@@ -71,6 +92,7 @@ def start_request(
         provider=provider,
         model=model,
         status="pending",
+        public_request_id=public_request_id,
     )
 
     db.add(database_request)
@@ -94,7 +116,12 @@ def finish_request(
     output_tokens: int | None = None,
     error_code: str | None = None,
 ) -> UUID:
-    """Persist a validated final request outcome."""
+    """Finalize one pending request, failing closed on rejection.
+
+    A leased request must present its valid, unexpired
+    token. An unsuccessful conditional database update
+    must never be mistaken for successful auditing.
+    """
 
     if outcome not in ALLOWED_FINAL_STATUSES:
         raise ValueError("Unsupported request outcome.")
@@ -109,12 +136,29 @@ def finish_request(
     if outcome == "blocked":
         error_code = "response_blocked"
 
-    return complete_request(
-        request_id=request.request_id,
-        tenant_id=request.tenant_id,
-        status=outcome,
-        latency=latency_ms,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        error_code=error_code,
-    )
+    arguments = {
+        "request_id": request.request_id,
+        "tenant_id": request.tenant_id,
+        "status": outcome,
+        "latency": latency_ms,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "error_code": error_code,
+    }
+
+    if request.lease_token is not None:
+        arguments["lease_token"] = request.lease_token
+
+    result = complete_request(**arguments)
+
+    if result is None:
+        raise RequestFinalizationError(
+            "Request finalization was rejected."
+        )
+
+    if result != request.request_id:
+        raise RequestFinalizationError(
+            "Request finalization returned an unexpected ID."
+        )
+
+    return result

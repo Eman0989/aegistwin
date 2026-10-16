@@ -15,6 +15,7 @@ from app.gateway.postgres_orchestrator import (
     ResponseBlockedError,
     run_postgres_inference,
 )
+from app.gateway.postgres_request_lifecycle import PersistedRequest
 from app.gateway.postgres_session_manager import ManagedSession
 from app.gateway.postgres_session_resolver import SessionAccessDenied
 from app.security.llm_response_inspector import (
@@ -64,19 +65,46 @@ def setup_orchestrator():
         created=True,
     )
 
+    persisted = PersistedRequest(
+        request_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=session_id,
+        public_request_id=request.request_id,
+    )
+
     manager = patch(
         "app.gateway.postgres_orchestrator.manage_postgres_session",
         return_value=managed,
     )
+
     starter = patch(
         "app.gateway.postgres_orchestrator.start_request",
-        return_value=MagicMock(),
-    )
-    finisher = patch(
-        "app.gateway.postgres_orchestrator.finish_request",
+        return_value=persisted,
     )
 
-    with manager as mock_manager, starter as mock_start, finisher as mock_finish:
+    finisher = patch(
+        "app.gateway.postgres_orchestrator.finish_request",
+        return_value=persisted.request_id,
+    )
+
+    acquirer = patch(
+        "app.gateway.postgres_orchestrator.acquire_request_lease",
+        return_value="test-lease-token",
+    )
+
+    renewer = patch(
+        "app.gateway.postgres_orchestrator.renew_request_lease",
+        return_value=True,
+    )
+
+    with (
+        manager as mock_manager,
+        starter as mock_start,
+        finisher as mock_finish,
+        acquirer as mock_acquire,
+        renewer as mock_renew,
+    ):
         yield {
             "db": db,
             "request": request,
@@ -84,6 +112,8 @@ def setup_orchestrator():
             "manager": mock_manager,
             "start": mock_start,
             "finish": mock_finish,
+            "acquire": mock_acquire,
+            "renew": mock_renew,
         }
 
 
@@ -115,6 +145,7 @@ async def test_safe_response(setup_orchestrator):
     ctx["db"].commit.assert_called_once()
     ctx["finish"].assert_called_once()
     assert ctx["finish"].call_args.kwargs["outcome"] == "completed"
+    ctx["acquire"].assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -206,6 +237,7 @@ async def test_unauthorized_session_blocks_inference(setup_orchestrator):
     ctx["manager"].side_effect = SessionAccessDenied(
         "Session is not authorized."
     )
+
     provider = MagicMock()
     provider.generate = AsyncMock()
 
@@ -219,6 +251,7 @@ async def test_unauthorized_session_blocks_inference(setup_orchestrator):
 
     provider.generate.assert_not_awaited()
     ctx["start"].assert_not_called()
+    ctx["acquire"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -227,6 +260,7 @@ async def test_database_commit_failure_blocks_inference(setup_orchestrator):
     ctx["db"].commit.side_effect = RuntimeError(
         "Database unavailable"
     )
+
     provider = MagicMock()
     provider.generate = AsyncMock()
 
@@ -240,6 +274,8 @@ async def test_database_commit_failure_blocks_inference(setup_orchestrator):
 
     provider.generate.assert_not_awaited()
     ctx["finish"].assert_not_called()
+    ctx["acquire"].assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_mismatched_provider_request_id_is_blocked(
@@ -294,6 +330,7 @@ async def test_inconsistent_allow_result_is_blocked(
 
     assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
 
+
 @pytest.mark.asyncio
 async def test_inspector_exception_blocks_response(setup_orchestrator):
     ctx = setup_orchestrator
@@ -318,7 +355,9 @@ async def test_inspector_exception_blocks_response(setup_orchestrator):
 
 
 @pytest.mark.asyncio
-async def test_audit_completion_failure_prevents_response(setup_orchestrator):
+async def test_audit_completion_failure_prevents_response(
+    setup_orchestrator,
+):
     ctx = setup_orchestrator
     ctx["finish"].side_effect = RuntimeError("Database unavailable")
 
@@ -357,6 +396,7 @@ async def test_invalid_usage_metrics_prevent_success(setup_orchestrator):
         )
 
     assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -512,3 +552,46 @@ async def test_invalid_latency_is_blocked(
         )
 
     assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
+
+@pytest.mark.asyncio
+async def test_lease_loss_prevents_model_response_release(
+    setup_orchestrator,
+):
+    """A worker that loses its lease cannot release LLM output."""
+
+    ctx = setup_orchestrator
+
+    provider = MagicMock()
+    provider.generate = AsyncMock(
+        return_value=make_response(ctx["request"])
+    )
+
+    async def simulate_lease_loss(persisted, worker_id):
+        from contextlib import asynccontextmanager
+
+    # Simulate a heartbeat reporting that ownership was lost.
+    from contextlib import asynccontextmanager
+    import asyncio
+
+    @asynccontextmanager
+    async def lost_heartbeat(persisted, worker_id):
+        lost = asyncio.Event()
+        lost.set()
+        yield lost
+
+    with patch(
+        "app.gateway.postgres_orchestrator._lease_heartbeat",
+        lost_heartbeat,
+    ):
+        from app.gateway.postgres_orchestrator import RequestLeaseError
+
+        with pytest.raises(RequestLeaseError):
+            await run_postgres_inference(
+                model_request=ctx["request"],
+                provider_router=provider,
+                db=ctx["db"],
+                requested_session_id=None,
+            )
+
+    provider.generate.assert_awaited_once()
+    ctx["finish"].assert_not_called()

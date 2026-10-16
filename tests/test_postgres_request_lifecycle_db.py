@@ -30,7 +30,7 @@ def verify_test_database():
     if (
         DATABASE_URL.database != "aegistwin_test_db"
         or DATABASE_URL.host not in ("localhost", "127.0.0.1")
-        or DATABASE_URL.port != 55432
+        or DATABASE_URL.port not in (55432, 55433)
     ):
         raise RuntimeError("Unsafe database connection.")
 

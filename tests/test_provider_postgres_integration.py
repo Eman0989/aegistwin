@@ -58,7 +58,7 @@ def verify_test_database():
             "Integration tests require a local database."
         )
 
-    if DATABASE_URL.port != 55432:
+    if DATABASE_URL.port not in (55432, 55433):
         raise RuntimeError(
             "Unexpected database port."
         )
