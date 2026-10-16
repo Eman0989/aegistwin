@@ -178,3 +178,92 @@ def test_postgres_does_not_run_legacy_inspector(
     assert response.status_code == 200, response.text
     assert response.json()["content"] == "Already inspected."
     legacy_inspector.assert_not_called()
+
+def test_legacy_redaction_preserves_response_metadata(
+    gateway_client,
+):
+    """Redaction must not alter request or provider metadata."""
+
+    client, provider = gateway_client
+
+    original = "Email alice@example.com for help."
+
+    async def generate(request):
+        return ModelResponse(
+            request_id=request.request_id,
+            provider=request.provider,
+            model=request.model,
+            content=original,
+            usage={
+                "input_tokens": 5,
+                "output_tokens": 7,
+            },
+            latency_ms=12.5,
+            finish_reason="stop",
+        )
+
+    provider.generate.side_effect = generate
+
+    with patch(
+        "app.gateway.routes.inspect_response",
+        wraps=__import__(
+            "app.security.llm_response_inspector",
+            fromlist=["inspect_response"],
+        ).inspect_response,
+    ) as inspector:
+        response = send(client)
+
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+
+    assert original not in body["content"]
+    assert body["provider"] == "ollama"
+    assert body["model"] == "llama3.2:3b"
+    assert body["usage"]["input_tokens"] == 5
+    assert body["usage"]["output_tokens"] == 7
+    assert body["latency_ms"] == 12.5
+    assert body["finish_reason"] == "stop"
+    assert body["request_id"].startswith("REQ-")
+
+    inspector.assert_called_once_with(original)
+
+
+def test_legacy_block_preserves_safe_request_id(
+    gateway_client,
+):
+    """Blocked output never appears in the HTTP response."""
+
+    client, provider = gateway_client
+
+    unsafe_content = "HIGHLY-SENSITIVE-SECRET-CONTENT"
+
+    async def generate(request):
+        return ModelResponse(
+            request_id=request.request_id,
+            provider=request.provider,
+            model=request.model,
+            content=unsafe_content,
+        )
+
+    provider.generate.side_effect = generate
+
+    with patch(
+        "app.gateway.routes.inspect_response",
+        return_value=ResponseInspection(
+            action=ResponseAction.BLOCK,
+            content=None,
+            reason="Test security block.",
+        ),
+    ) as inspector:
+        response = send(client)
+
+    assert response.status_code == 403
+
+    detail = response.json()["detail"]
+
+    assert detail["code"] == "response_blocked"
+    assert detail["request_id"].startswith("REQ-")
+    assert unsafe_content not in response.text
+
+    inspector.assert_called_once_with(unsafe_content)
