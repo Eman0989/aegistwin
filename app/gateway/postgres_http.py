@@ -5,29 +5,43 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.contracts import ModelRequest
+
 from app.gateway.postgres_orchestrator import (
     OrchestrationResult,
     ResponseBlockedError,
     run_postgres_inference,
 )
+
 from app.gateway.postgres_session_resolver import (
     InvalidDatabaseIdentity,
     SessionAccessDenied,
 )
+
 from app.providers.errors import ProviderError
 
 
+# ==================================================
+# VALIDATION
+# ==================================================
+
 def _valid_uuid(value: str) -> bool:
+    """Check that an identity or session ID is a UUID."""
+
     try:
         UUID(value)
         return True
+
     except (ValueError, TypeError, AttributeError):
         return False
 
+
+# ==================================================
+# SAFE HTTP ERRORS
+# ==================================================
 
 def _safe_error(
     status_code: int,
@@ -35,6 +49,8 @@ def _safe_error(
     message: str,
     request_id: str,
 ) -> HTTPException:
+    """Return a sanitized error with a correlation header."""
+
     return HTTPException(
         status_code=status_code,
         detail={
@@ -42,8 +58,15 @@ def _safe_error(
             "message": message,
             "request_id": request_id,
         },
+        headers={
+            "X-Request-ID": request_id,
+        },
     )
 
+
+# ==================================================
+# POSTGRESQL RUNTIME HTTP BOUNDARY
+# ==================================================
 
 async def generate_postgres_response(
     *,
@@ -56,6 +79,10 @@ async def generate_postgres_response(
 
     request_id = model_request.request_id
     identity = model_request.trusted_context
+
+    # ==================================================
+    # 1. VALIDATE TRUSTED DATABASE IDENTITY
+    # ==================================================
 
     # Trusted identity comes from server-side authentication.
     # Invalid tenant/agent configuration is a server error.
@@ -70,6 +97,10 @@ async def generate_postgres_response(
             request_id,
         )
 
+    # ==================================================
+    # 2. VALIDATE CLIENT SESSION ID
+    # ==================================================
+
     # The requested session ID is client-supplied.
     if (
         requested_session_id is not None
@@ -82,6 +113,10 @@ async def generate_postgres_response(
             request_id,
         )
 
+    # ==================================================
+    # 3. EXECUTE AUTHORIZED POSTGRESQL INFERENCE
+    # ==================================================
+
     try:
         return await run_postgres_inference(
             model_request=model_request,
@@ -89,6 +124,10 @@ async def generate_postgres_response(
             db=db,
             requested_session_id=requested_session_id,
         )
+
+    # ==================================================
+    # 4. DATABASE IDENTITY ERRORS
+    # ==================================================
 
     except InvalidDatabaseIdentity as exc:
         raise _safe_error(
@@ -98,6 +137,10 @@ async def generate_postgres_response(
             request_id,
         ) from exc
 
+    # ==================================================
+    # 5. TENANT OR SESSION AUTHORIZATION ERRORS
+    # ==================================================
+
     except SessionAccessDenied as exc:
         raise _safe_error(
             403,
@@ -106,18 +149,33 @@ async def generate_postgres_response(
             request_id,
         ) from exc
 
+    # ==================================================
+    # 6. SECURITY INSPECTION BLOCKS
+    # ==================================================
+
     except ResponseBlockedError as exc:
         raise _safe_error(
             403,
             "response_blocked",
-            "The model response was blocked by AegisTwin security policy.",
+            (
+                "The model response was blocked "
+                "by AegisTwin security policy."
+            ),
             request_id,
         ) from exc
+
+    # ==================================================
+    # 7. PROVIDER ERRORS
+    # ==================================================
 
     except ProviderError:
         # Let the existing gateway route apply its
         # established sanitized provider-error mapping.
         raise
+
+    # ==================================================
+    # 8. POSTGRESQL FAILURES
+    # ==================================================
 
     except SQLAlchemyError as exc:
         raise _safe_error(
@@ -127,9 +185,13 @@ async def generate_postgres_response(
             request_id,
         ) from exc
 
+    # ==================================================
+    # 9. UNEXPECTED INTERNAL FAILURES
+    # ==================================================
+
     except Exception as exc:
         # Fail closed for unexpected internal/audit failures.
-        # Do not expose database queries, secrets or tracebacks.
+        # Do not expose queries, secrets or tracebacks.
         raise _safe_error(
             503,
             "runtime_internal_error",
