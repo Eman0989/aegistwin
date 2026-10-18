@@ -1,0 +1,48 @@
+
+name: Python Tests
+
+on:
+  push:
+    branches:
+      - integration
+      - feature/postgres-reliability
+  pull_request:
+    branches:
+      - integration
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python Unit Tests
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-db.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-db.txt
+
+      - name: Run Python tests
+        env:
+          RUN_POSTGRES_INTEGRATION: "0"
+          AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
+        run: |
+          python -m pytest -q --tb=short
