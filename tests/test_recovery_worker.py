@@ -472,3 +472,58 @@ def test_one_tenant_failure_does_not_block_other_tenants():
         recover.call_args_list[1].kwargs["tenant_id"]
         == tenant_b
     )
+
+def test_shutdown_during_active_recovery_finishes_cycle():
+    """Shutdown should finish the active cycle without starting another."""
+
+    import threading
+
+    worker = RecoveryWorker(interval_seconds=1)
+
+    cycle_started = threading.Event()
+    release_cycle = threading.Event()
+
+    results = []
+
+    def slow_cycle():
+        cycle_started.set()
+
+        assert release_cycle.wait(timeout=5)
+
+        results.append("cycle_finished")
+
+        return RecoveryStats(
+            tenants_scanned=1,
+            requests_recovered=1,
+        )
+
+    with patch.object(
+        worker,
+        "run_once",
+        side_effect=slow_cycle,
+    ) as cycle:
+        thread = threading.Thread(
+            target=worker.run_forever,
+        )
+
+        thread.start()
+
+        try:
+            assert cycle_started.wait(timeout=5)
+
+            # Simulate SIGTERM / SIGINT handler.
+            worker.stop()
+
+            # Allow in-flight recovery to finish.
+            release_cycle.set()
+
+            thread.join(timeout=5)
+
+            assert not thread.is_alive()
+            assert results == ["cycle_finished"]
+            assert cycle.call_count == 1
+
+        finally:
+            release_cycle.set()
+            worker.stop()
+            thread.join(timeout=5)
