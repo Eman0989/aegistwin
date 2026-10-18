@@ -27,3 +27,7 @@ data/*.db-wal
 .env.docker
 
 !.env.docker.example
+
+# Database backups
+backups/
+*.dump
