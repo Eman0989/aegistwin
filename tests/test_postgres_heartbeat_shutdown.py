@@ -107,3 +107,84 @@ async def test_cancellation_waits_for_inflight_heartbeat_renewal():
         assert finished, "Heartbeat DB operation did not finish."
         assert inference_task.cancelled()
         renew.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_during_heartbeat_renewal():
+    """Repeated cancellation must not abandon an active DB renewal."""
+
+    renewal_started = threading.Event()
+    release_renewal = threading.Event()
+    renewal_finished = threading.Event()
+
+    persisted = PersistedRequest(
+        request_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=uuid4(),
+        public_request_id="REQ-repeated-cancellation",
+        lease_token="test-lease-token",
+    )
+
+    def slow_renewal(**kwargs):
+        renewal_started.set()
+        try:
+            assert release_renewal.wait(timeout=5)
+            return True
+        finally:
+            renewal_finished.set()
+
+    async def inference():
+        async with _lease_heartbeat(
+            persisted,
+            worker_id="worker-test",
+        ):
+            await asyncio.Event().wait()
+
+    with (
+        patch(
+            "app.gateway.postgres_orchestrator.HEARTBEAT_SECONDS",
+            0.01,
+        ),
+        patch(
+            "app.gateway.postgres_orchestrator.renew_request_lease",
+            side_effect=slow_renewal,
+        ),
+    ):
+        task = asyncio.create_task(inference())
+
+        try:
+            assert await asyncio.to_thread(
+                renewal_started.wait, 2
+            )
+
+            task.cancel()
+
+            # Allow cleanup to begin without releasing
+            # the database renewal.
+            await asyncio.sleep(0)
+
+            task.cancel()
+
+            # Cancellation must not complete while
+            # the synchronous renewal is still active.
+            await asyncio.sleep(0)
+
+            assert not task.done(), (
+                "Repeated cancellation abandoned "
+                "an in-flight database renewal."
+            )
+
+        finally:
+            release_renewal.set()
+
+            assert await asyncio.to_thread(
+                renewal_finished.wait, 2
+            )
+
+            if not task.done():
+                task.cancel()
+
+            try:
+                await asyncio.wait_for(task, timeout=2)
+            except asyncio.CancelledError:
+                pass
