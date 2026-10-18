@@ -120,3 +120,29 @@ jobs:
       - name: Run PostgreSQL integration tests
         run: |
           python -m pytest -q --tb=short
+
+  docker-build:
+    name: Docker Image Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --pull \
+            --tag aegistwin-ci-test \
+            --file Dockerfile .
+
+      - name: Verify non-root container user
+        run: |
+          IMAGE_USER=$(docker image inspect \
+            aegistwin-ci-test \
+            --format '{{.Config.User}}')
+
+          test "$IMAGE_USER" = "10001:10001"
+
+          echo "Docker image uses non-root user: $IMAGE_USER"
