@@ -1,0 +1,147 @@
+
+name: aegistwin-local
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${DB_USER:?Set DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:?Set DB_NAME}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+    networks:
+      - backend
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    env_file:
+      - .env.docker
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+
+    command:
+      - python
+      - -m
+      - alembic
+      - upgrade
+      - head
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    restart: "no"
+
+    networks:
+      - backend
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - .env.docker
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "true"
+
+    command:
+      - python
+      - -m
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      - sqlite_evidence:/srv/app/data
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=5)"
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
+
+    networks:
+      - backend
+
+  recovery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    env_file:
+      - .env.docker
+
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+
+    command:
+      - python
+      - -m
+      - app.infrastructure.recovery_worker
+      - --interval-seconds
+      - "15"
+      - --batch-size
+      - "100"
+      - --tenant-limit
+      - "100"
+
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+    stop_grace_period: 60s
+
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+  sqlite_evidence:
+
+networks:
+  backend:
+    driver: bridge
