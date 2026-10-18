@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    env:
+      RUN_POSTGRES_INTEGRATION: "0"
+      RUN_LIVE_OLLAMA_TESTS: "0"
+      AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -40,9 +45,6 @@ jobs:
             -r requirements-db.txt
 
       - name: Run Python unit tests
-        env:
-          RUN_POSTGRES_INTEGRATION: "0"
-          AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
         run: |
           python -m pytest -q --tb=short
 
@@ -73,6 +75,7 @@ jobs:
       DB_PASSWORD: "ci-test-only-password"
       DB_NAME: "aegistwin_test_db"
       RUN_POSTGRES_INTEGRATION: "1"
+      RUN_LIVE_OLLAMA_TESTS: "0"
       AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
 
     steps:
