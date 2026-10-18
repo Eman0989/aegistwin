@@ -7,7 +7,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from math import isfinite
-from typing import Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -34,6 +34,67 @@ from app.security.llm_response_inspector import (
 
 LEASE_SECONDS = 60
 HEARTBEAT_SECONDS = 20
+
+
+def _prepare_initial_request(
+    *,
+    model_request: ModelRequest,
+    requested_session_id: str | None,
+    worker_id: str,
+    db: Session,
+):
+    """Authorize, create a leased request, and commit atomically.
+
+    Called from a worker thread. Production code must create and close
+    its SQLAlchemy Session inside that worker thread (follow-up change).
+    """
+    try:
+        managed = manage_postgres_session(
+            identity=model_request.trusted_context,
+            db=db,
+            requested_session_id=requested_session_id,
+        )
+
+        authorized_request = model_request.model_copy(
+            update={"trusted_context": managed.identity}
+        )
+
+        persisted = start_leased_request(
+            identity=managed.identity,
+            public_request_id=authorized_request.request_id,
+            provider=authorized_request.provider,
+            model=authorized_request.model,
+            worker_id=worker_id,
+            db=db,
+            lease_seconds=LEASE_SECONDS,
+        )
+
+        db.commit()
+
+        return managed, authorized_request, persisted
+
+    except BaseException:
+        db.rollback()
+        raise
+
+
+
+def _prepare_with_session_factory(
+    *,
+    model_request: ModelRequest,
+    requested_session_id: str | None,
+    worker_id: str,
+    session_factory: Callable[[], Session],
+):
+    """Create, use, and close a DB session within one worker thread."""
+
+    with session_factory() as db:
+        return _prepare_initial_request(
+            model_request=model_request,
+            requested_session_id=requested_session_id,
+            worker_id=worker_id,
+            db=db,
+        )
 
 
 class ProviderProtocol(Protocol):
@@ -270,8 +331,9 @@ async def run_postgres_inference(
     *,
     model_request: ModelRequest,
     provider_router: ProviderProtocol,
-    db: Session,
-    requested_session_id: str | None,
+    db: Session | None = None,
+    requested_session_id: str | None = None,
+    session_factory: Callable[[], Session] | None = None,
 ) -> OrchestrationResult:
     """Execute one tenant-authorized, leased model request.
 
@@ -286,51 +348,35 @@ async def run_postgres_inference(
     - Finalization must succeed before returning content.
     """
 
-    # ======================================================
-    # 1. AUTHORIZE OR CREATE POSTGRESQL SESSION
-    # ======================================================
-
-    managed = manage_postgres_session(
-        identity=model_request.trusted_context,
-        db=db,
-        requested_session_id=requested_session_id,
-    )
-
-    authorized_request = model_request.model_copy(
-        update={
-            "trusted_context": managed.identity,
-        }
-    )
-
-    # ======================================================
-    # 2. CREATE REQUEST AND LEASE ATOMICALLY
-    # ======================================================
+    # Initial synchronous database transaction runs off the event loop.
+    # Production Session lifecycle must be moved into the same worker
+    # thread before deploying this intermediate change.
 
     worker_id = f"aegis-worker-{uuid4().hex}"
 
-    try:
-        persisted = start_leased_request(
-            identity=managed.identity,
-            public_request_id=authorized_request.request_id,
-            provider=authorized_request.provider,
-            model=authorized_request.model,
-            worker_id=worker_id,
-            db=db,
-            lease_seconds=LEASE_SECONDS,
+    if (db is None) == (session_factory is None):
+        raise ValueError(
+            "Provide exactly one of db or session_factory."
         )
 
-        # The pending request and its lease become
-        # durable in the same database transaction.
-        #
-        # Provider inference must not begin until
-        # the transaction commits successfully.
-        db.commit()
-
-    except BaseException:
-        # A failed initial lease must not leave a
-        # committed, unleased pending request.
-        db.rollback()
-        raise
+    if session_factory is not None:
+        managed, authorized_request, persisted = await asyncio.to_thread(
+            _prepare_with_session_factory,
+            model_request=model_request,
+            requested_session_id=requested_session_id,
+            worker_id=worker_id,
+            session_factory=session_factory,
+        )
+    else:
+        # Backward-compatible path for existing tests and callers.
+        # Production HTTP requests must use session_factory.
+        managed, authorized_request, persisted = await asyncio.to_thread(
+            _prepare_initial_request,
+            model_request=model_request,
+            requested_session_id=requested_session_id,
+            worker_id=worker_id,
+            db=db,
+        )
 
     # ======================================================
     # 3. PROVIDER INFERENCE WITH HEARTBEAT RENEWAL
@@ -370,14 +416,16 @@ async def run_postgres_inference(
 
     if provider_error is not None:
         if isinstance(provider_error, ProviderError):
-            finish_request(
+            await asyncio.to_thread(
+                finish_request,
                 request=persisted,
                 outcome="failed",
                 error_code=provider_error.code,
             )
 
         else:
-            finish_request(
+            await asyncio.to_thread(
+                finish_request,
                 request=persisted,
                 outcome="failed",
                 error_code="provider_error",
@@ -396,7 +444,8 @@ async def run_postgres_inference(
         )
 
     except ResponseBlockedError:
-        finish_request(
+        await asyncio.to_thread(
+            finish_request,
             request=persisted,
             outcome="blocked",
         )
@@ -414,7 +463,8 @@ async def run_postgres_inference(
     # Both ALLOW and REDACT outcomes must be audited
     # before any generated content reaches the client.
 
-    finish_request(
+    await asyncio.to_thread(
+        finish_request,
         request=persisted,
         outcome="completed",
         latency_ms=response.latency_ms,

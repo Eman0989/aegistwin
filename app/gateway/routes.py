@@ -330,13 +330,12 @@ async def generate_model(
         try:
             # Only open a database session when PostgreSQL
             # runtime is explicitly enabled.
-            with SessionLocal() as db:
-                result = await generate_postgres_response(
-                    model_request=model_request,
-                    provider_router=provider_router,
-                    db=db,
-                    requested_session_id=requested_session_id,
-                )
+            result = await generate_postgres_response(
+                model_request=model_request,
+                provider_router=provider_router,
+                session_factory=SessionLocal,
+                requested_session_id=requested_session_id,
+            )
 
         except RuntimeProviderError as exc:
             # Preserve established sanitized provider errors.

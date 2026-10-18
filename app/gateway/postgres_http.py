@@ -72,8 +72,9 @@ async def generate_postgres_response(
     *,
     model_request: ModelRequest,
     provider_router,
-    db,
-    requested_session_id: str | None,
+    db=None,
+    requested_session_id: str | None = None,
+    session_factory=None,
 ) -> OrchestrationResult:
     """Run PostgreSQL inference with sanitized HTTP errors."""
 
@@ -123,6 +124,7 @@ async def generate_postgres_response(
             provider_router=provider_router,
             db=db,
             requested_session_id=requested_session_id,
+            session_factory=session_factory,
         )
 
     # ==================================================
