@@ -1,6 +1,8 @@
 
 """Tests for PostgreSQL-backed inference orchestration."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -12,6 +14,7 @@ from app.contracts import (
     TrustedIdentityContext,
 )
 from app.gateway.postgres_orchestrator import (
+    RequestLeaseError,
     ResponseBlockedError,
     run_postgres_inference,
 )
@@ -71,6 +74,7 @@ def setup_orchestrator():
         agent_id=uuid4(),
         session_id=session_id,
         public_request_id=request.request_id,
+        lease_token="test-lease-token",
     )
 
     manager = patch(
@@ -79,18 +83,13 @@ def setup_orchestrator():
     )
 
     starter = patch(
-        "app.gateway.postgres_orchestrator.start_request",
+        "app.gateway.postgres_orchestrator.start_leased_request",
         return_value=persisted,
     )
 
     finisher = patch(
         "app.gateway.postgres_orchestrator.finish_request",
         return_value=persisted.request_id,
-    )
-
-    acquirer = patch(
-        "app.gateway.postgres_orchestrator.acquire_request_lease",
-        return_value="test-lease-token",
     )
 
     renewer = patch(
@@ -102,17 +101,16 @@ def setup_orchestrator():
         manager as mock_manager,
         starter as mock_start,
         finisher as mock_finish,
-        acquirer as mock_acquire,
         renewer as mock_renew,
     ):
         yield {
             "db": db,
             "request": request,
             "managed": managed,
+            "persisted": persisted,
             "manager": mock_manager,
             "start": mock_start,
             "finish": mock_finish,
-            "acquire": mock_acquire,
             "renew": mock_renew,
         }
 
@@ -145,7 +143,17 @@ async def test_safe_response(setup_orchestrator):
     ctx["db"].commit.assert_called_once()
     ctx["finish"].assert_called_once()
     assert ctx["finish"].call_args.kwargs["outcome"] == "completed"
-    ctx["acquire"].assert_called_once()
+
+    ctx["start"].assert_called_once()
+    assert ctx["start"].call_args.kwargs["lease_seconds"] == 60
+    assert ctx["start"].call_args.kwargs["worker_id"].startswith(
+        "aegis-worker-"
+    )
+
+    assert (
+        ctx["finish"].call_args.kwargs["request"].lease_token
+        == "test-lease-token"
+    )
 
 
 @pytest.mark.asyncio
@@ -251,7 +259,7 @@ async def test_unauthorized_session_blocks_inference(setup_orchestrator):
 
     provider.generate.assert_not_awaited()
     ctx["start"].assert_not_called()
-    ctx["acquire"].assert_not_called()
+    ctx["db"].commit.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -264,7 +272,7 @@ async def test_database_commit_failure_blocks_inference(setup_orchestrator):
     provider = MagicMock()
     provider.generate = AsyncMock()
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Database unavailable"):
         await run_postgres_inference(
             model_request=ctx["request"],
             provider_router=provider,
@@ -273,8 +281,9 @@ async def test_database_commit_failure_blocks_inference(setup_orchestrator):
         )
 
     provider.generate.assert_not_awaited()
+    ctx["start"].assert_called_once()
+    ctx["db"].rollback.assert_called_once()
     ctx["finish"].assert_not_called()
-    ctx["acquire"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -553,6 +562,7 @@ async def test_invalid_latency_is_blocked(
 
     assert ctx["finish"].call_args.kwargs["outcome"] == "blocked"
 
+
 @pytest.mark.asyncio
 async def test_lease_loss_prevents_model_response_release(
     setup_orchestrator,
@@ -566,13 +576,6 @@ async def test_lease_loss_prevents_model_response_release(
         return_value=make_response(ctx["request"])
     )
 
-    async def simulate_lease_loss(persisted, worker_id):
-        from contextlib import asynccontextmanager
-
-    # Simulate a heartbeat reporting that ownership was lost.
-    from contextlib import asynccontextmanager
-    import asyncio
-
     @asynccontextmanager
     async def lost_heartbeat(persisted, worker_id):
         lost = asyncio.Event()
@@ -583,8 +586,6 @@ async def test_lease_loss_prevents_model_response_release(
         "app.gateway.postgres_orchestrator._lease_heartbeat",
         lost_heartbeat,
     ):
-        from app.gateway.postgres_orchestrator import RequestLeaseError
-
         with pytest.raises(RequestLeaseError):
             await run_postgres_inference(
                 model_request=ctx["request"],

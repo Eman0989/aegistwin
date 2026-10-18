@@ -1,5 +1,5 @@
 
-"""PostgreSQL-backed inference with leased audit execution."""
+"""PostgreSQL-backed inference with atomic leases and audit execution."""
 
 from __future__ import annotations
 
@@ -13,17 +13,16 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.contracts import ModelRequest, ModelResponse
+
 from app.gateway.postgres_request_lifecycle import (
     PersistedRequest,
-    attach_lease,
     finish_request,
-    start_request,
+    start_leased_request,
 )
 from app.gateway.postgres_session_manager import (
     manage_postgres_session,
 )
 from app.infrastructure.persistence import (
-    acquire_request_lease,
     renew_request_lease,
 )
 from app.providers.errors import ProviderError
@@ -64,43 +63,24 @@ class OrchestrationResult:
 # ==========================================================
 
 
-def _acquire_lease(
-    persisted: PersistedRequest,
-    worker_id: str,
-) -> PersistedRequest:
-    """Claim the committed request before provider inference."""
-
-    token = acquire_request_lease(
-        tenant_id=persisted.tenant_id,
-        request_id=persisted.request_id,
-        worker_id=worker_id,
-        lease_seconds=LEASE_SECONDS,
-    )
-
-    if not isinstance(token, str) or not token:
-        raise RequestLeaseError(
-            "Request lease acquisition was rejected."
-        )
-
-    return attach_lease(
-        request=persisted,
-        lease_token=token,
-    )
-
-
 @asynccontextmanager
 async def _lease_heartbeat(
     persisted: PersistedRequest,
     worker_id: str,
 ):
-    """Renew the request lease during asynchronous inference.
+    """Renew a request lease while provider inference is running.
 
-    The heartbeat uses a worker thread for synchronous
-    SQLAlchemy I/O, avoiding blocking the event loop.
+    SQLAlchemy persistence operations run in a worker thread
+    to avoid blocking the asynchronous event loop.
 
-    On heartbeat failure, prevent the response from
-    being treated as successfully audited.
+    A failed renewal marks ownership as lost. The gateway
+    must not release model output after ownership loss.
     """
+
+    if not persisted.lease_token:
+        raise RequestLeaseError(
+            "Request has no valid lease token."
+        )
 
     stop_event = asyncio.Event()
     ownership_lost = asyncio.Event()
@@ -113,8 +93,12 @@ async def _lease_heartbeat(
                     timeout=HEARTBEAT_SECONDS,
                 )
                 break
+
             except asyncio.TimeoutError:
                 pass
+
+            if stop_event.is_set():
+                break
 
             try:
                 renewed = await asyncio.to_thread(
@@ -125,6 +109,7 @@ async def _lease_heartbeat(
                     lease_token=persisted.lease_token,
                     lease_seconds=LEASE_SECONDS,
                 )
+
             except Exception:
                 ownership_lost.set()
                 return
@@ -137,11 +122,12 @@ async def _lease_heartbeat(
 
     try:
         yield ownership_lost
+
     finally:
         stop_event.set()
 
-        # Allow an in-flight renewal to settle before the
-        # orchestrator attempts audit finalization.
+        # Wait for any in-flight renewal to finish before
+        # attempting audit finalization.
         await task
 
 
@@ -158,7 +144,7 @@ def _validate_response(
     response,
     request: ModelRequest,
 ) -> None:
-    """Reject responses that do not match the request."""
+    """Reject responses that do not match their originating request."""
 
     if (
         not isinstance(response, ModelResponse)
@@ -175,21 +161,33 @@ def _inspect_and_validate(
     response: ModelResponse,
     request: ModelRequest,
 ) -> ModelResponse:
-    """Inspect output and validate safe response metadata."""
+    """Inspect model output and validate response metadata."""
 
     _validate_response(response, request)
 
     try:
-        inspection = inspect_response(response.content)
+        inspection = inspect_response(
+            response.content
+        )
+
     except Exception:
+        # Never release content that could not be inspected.
         raise _blocked(
             "The model response was blocked by security policy."
         ) from None
+
+    # ------------------------------------------------------
+    # BLOCK
+    # ------------------------------------------------------
 
     if inspection.action == ResponseAction.BLOCK:
         raise _blocked(
             "The model response was blocked by security policy."
         )
+
+    # ------------------------------------------------------
+    # REDACT
+    # ------------------------------------------------------
 
     if inspection.action == ResponseAction.REDACT:
         if not isinstance(inspection.content, str):
@@ -198,8 +196,14 @@ def _inspect_and_validate(
             )
 
         response = response.model_copy(
-            update={"content": inspection.content}
+            update={
+                "content": inspection.content,
+            }
         )
+
+    # ------------------------------------------------------
+    # ALLOW
+    # ------------------------------------------------------
 
     elif inspection.action == ResponseAction.ALLOW:
         if (
@@ -210,10 +214,18 @@ def _inspect_and_validate(
                 "The model response failed inspection validation."
             )
 
+    # ------------------------------------------------------
+    # UNKNOWN ACTION
+    # ------------------------------------------------------
+
     else:
         raise _blocked(
             "The model response was blocked by security policy."
         )
+
+    # ------------------------------------------------------
+    # VALIDATE PROVIDER USAGE METRICS
+    # ------------------------------------------------------
 
     usage = response.usage
 
@@ -228,9 +240,16 @@ def _inspect_and_validate(
 
     if (
         not isinstance(usage, dict)
-        or not valid_token_count(usage.get("input_tokens"))
-        or not valid_token_count(usage.get("output_tokens"))
-        or not isinstance(response.latency_ms, (int, float))
+        or not valid_token_count(
+            usage.get("input_tokens")
+        )
+        or not valid_token_count(
+            usage.get("output_tokens")
+        )
+        or not isinstance(
+            response.latency_ms,
+            (int, float),
+        )
         or isinstance(response.latency_ms, bool)
         or not isfinite(response.latency_ms)
         or response.latency_ms < 0
@@ -254,9 +273,23 @@ async def run_postgres_inference(
     db: Session,
     requested_session_id: str | None,
 ) -> OrchestrationResult:
-    """Execute one tenant-authorized, leased model request."""
+    """Execute one tenant-authorized, leased model request.
 
-    # 1. Authorize or create the PostgreSQL session.
+    Security guarantees:
+
+    - The PostgreSQL session must be authorized.
+    - Request creation and initial lease are atomic.
+    - The transaction commits before provider inference.
+    - Heartbeat renewal maintains lease ownership.
+    - Generated content is inspected before release.
+    - A valid lease is required for audit finalization.
+    - Finalization must succeed before returning content.
+    """
+
+    # ======================================================
+    # 1. AUTHORIZE OR CREATE POSTGRESQL SESSION
+    # ======================================================
+
     managed = manage_postgres_session(
         identity=model_request.trusted_context,
         db=db,
@@ -264,37 +297,51 @@ async def run_postgres_inference(
     )
 
     authorized_request = model_request.model_copy(
-        update={"trusted_context": managed.identity}
+        update={
+            "trusted_context": managed.identity,
+        }
     )
 
-    # 2. Insert pending audit record.
-    persisted = start_request(
-        identity=managed.identity,
-        public_request_id=authorized_request.request_id,
-        provider=authorized_request.provider,
-        model=authorized_request.model,
-        db=db,
-    )
+    # ======================================================
+    # 2. CREATE REQUEST AND LEASE ATOMICALLY
+    # ======================================================
 
-    # The record must exist in PostgreSQL before inference.
-    db.commit()
-
-    # 3. Acquire exclusive worker ownership.
     worker_id = f"aegis-worker-{uuid4().hex}"
 
-    # Run synchronous database operations outside the event loop.
-    persisted = await asyncio.to_thread(
-        _acquire_lease,
-        persisted,
-        worker_id,
-    )
+    try:
+        persisted = start_leased_request(
+            identity=managed.identity,
+            public_request_id=authorized_request.request_id,
+            provider=authorized_request.provider,
+            model=authorized_request.model,
+            worker_id=worker_id,
+            db=db,
+            lease_seconds=LEASE_SECONDS,
+        )
 
-    # 4. Provider inference with heartbeat renewal.
+        # The pending request and its lease become
+        # durable in the same database transaction.
+        #
+        # Provider inference must not begin until
+        # the transaction commits successfully.
+        db.commit()
+
+    except BaseException:
+        # A failed initial lease must not leave a
+        # committed, unleased pending request.
+        db.rollback()
+        raise
+
+    # ======================================================
+    # 3. PROVIDER INFERENCE WITH HEARTBEAT RENEWAL
+    # ======================================================
+
     try:
         async with _lease_heartbeat(
             persisted,
             worker_id,
         ) as ownership_lost:
+
             try:
                 response = await provider_router.generate(
                     authorized_request
@@ -305,18 +352,22 @@ async def run_postgres_inference(
                 response = None
                 provider_error = exc
 
-        # Never continue if ownership was lost.
+        # Never continue if heartbeat renewal reported
+        # that the worker lost its lease.
         if ownership_lost.is_set():
             raise RequestLeaseError(
                 "Request lease ownership was lost."
             )
 
     except asyncio.CancelledError:
-        # Cancellation must not release any model content.
-        # The expired request can later be recovered.
+        # Cancellation must never release model output.
+        # Expired leases can later be recovered.
         raise
 
-    # 5. Audit provider failures before propagating them.
+    # ======================================================
+    # 4. AUDIT PROVIDER FAILURES
+    # ======================================================
+
     if provider_error is not None:
         if isinstance(provider_error, ProviderError):
             finish_request(
@@ -324,6 +375,7 @@ async def run_postgres_inference(
                 outcome="failed",
                 error_code=provider_error.code,
             )
+
         else:
             finish_request(
                 request=persisted,
@@ -333,7 +385,10 @@ async def run_postgres_inference(
 
         raise provider_error
 
-    # 6. Integrity validation and post-LLM inspection.
+    # ======================================================
+    # 5. VERIFY AND INSPECT MODEL RESPONSE
+    # ======================================================
+
     try:
         response = _inspect_and_validate(
             response,
@@ -347,17 +402,34 @@ async def run_postgres_inference(
         )
         raise
 
-    # 7. Finalize audit while the lease is valid.
-    # finish_request raises if conditional finalization fails.
+    # ======================================================
+    # 6. COMPLETE POSTGRESQL AUDIT RECORD
+    # ======================================================
+
+    # A valid, unexpired lease token is required.
+    #
+    # finish_request() raises RequestFinalizationError
+    # if PostgreSQL rejects the conditional update.
+    #
+    # Both ALLOW and REDACT outcomes must be audited
+    # before any generated content reaches the client.
+
     finish_request(
         request=persisted,
         outcome="completed",
         latency_ms=response.latency_ms,
-        input_tokens=response.usage.get("input_tokens"),
-        output_tokens=response.usage.get("output_tokens"),
+        input_tokens=response.usage.get(
+            "input_tokens"
+        ),
+        output_tokens=response.usage.get(
+            "output_tokens"
+        ),
     )
 
-    # 8. Only successfully audited output reaches the client.
+    # ======================================================
+    # 7. RETURN AUTHORIZED, INSPECTED RESPONSE
+    # ======================================================
+
     return OrchestrationResult(
         response=response,
         session_id=str(managed.session_id),

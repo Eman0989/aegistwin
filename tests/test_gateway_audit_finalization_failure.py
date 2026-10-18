@@ -13,6 +13,10 @@ from app.gateway.routes import get_provider_router
 from app.gateway.postgres_request_lifecycle import PersistedRequest
 from app.gateway.postgres_session_manager import ManagedSession
 from app.main import app
+from app.security.llm_response_inspector import (
+    ResponseAction,
+    ResponseInspection,
+)
 
 
 API_PATH = "/v1/model/generate"
@@ -90,6 +94,35 @@ def send_request(client):
     )
 
 
+def make_persisted_request(session_id):
+    """Return a request whose lease was created atomically."""
+
+    return PersistedRequest(
+        request_id=uuid4(),
+        tenant_id=uuid4(),
+        agent_id=uuid4(),
+        session_id=session_id,
+        public_request_id="REQ-test123",
+        lease_token="test-audit-lease-token",
+    )
+
+
+def manage_test_session(
+    *,
+    identity,
+    db,
+    requested_session_id,
+    session_id,
+):
+    return ManagedSession(
+        identity=identity.model_copy(
+            update={"session_id": str(session_id)}
+        ),
+        session_id=session_id,
+        created=True,
+    )
+
+
 # ==========================================================
 # TEST 1 — DATABASE FAILURE DURING FINALIZATION
 # ==========================================================
@@ -104,24 +137,14 @@ def test_finalization_database_failure_returns_safe_503(
 
     db = MagicMock()
     session_id = uuid4()
-
-    # Use a real dataclass, not MagicMock.
-    # attach_lease() needs a valid PersistedRequest.
-    persisted = PersistedRequest(
-        request_id=uuid4(),
-        tenant_id=uuid4(),
-        agent_id=uuid4(),
-        session_id=session_id,
-        public_request_id="REQ-test123",
-    )
+    persisted = make_persisted_request(session_id)
 
     def manage_session(*, identity, db, requested_session_id):
-        return ManagedSession(
-            identity=identity.model_copy(
-                update={"session_id": str(session_id)}
-            ),
+        return manage_test_session(
+            identity=identity,
+            db=db,
+            requested_session_id=requested_session_id,
             session_id=session_id,
-            created=True,
         )
 
     database_error = OperationalError(
@@ -141,14 +164,9 @@ def test_finalization_database_failure_returns_safe_503(
         ),
         patch(
             "app.gateway.postgres_orchestrator."
-            "start_request",
+            "start_leased_request",
             return_value=persisted,
-        ),
-        patch(
-            "app.gateway.postgres_orchestrator."
-            "acquire_request_lease",
-            return_value="test-audit-lease-token",
-        ) as acquire,
+        ) as starter,
         patch(
             "app.gateway.postgres_orchestrator."
             "finish_request",
@@ -157,20 +175,14 @@ def test_finalization_database_failure_returns_safe_503(
         patch(
             "app.gateway.postgres_orchestrator."
             "inspect_response",
-        ) as inspector,
+            return_value=ResponseInspection(
+                action=ResponseAction.ALLOW,
+                content=SECRET_RESPONSE,
+                reason="Safe response.",
+            ),
+        ),
     ):
         session_local.return_value.__enter__.return_value = db
-
-        from app.security.llm_response_inspector import (
-            ResponseAction,
-            ResponseInspection,
-        )
-
-        inspector.return_value = ResponseInspection(
-            action=ResponseAction.ALLOW,
-            content=SECRET_RESPONSE,
-            reason="Safe response.",
-        )
 
         response = send_request(client)
 
@@ -184,27 +196,45 @@ def test_finalization_database_failure_returns_safe_503(
     )
     assert detail["request_id"].startswith("REQ-")
 
+    # Neither generated content nor internal database
+    # details may appear in the HTTP response.
     assert SECRET_RESPONSE not in response.text
     assert SECRET_DATABASE_ERROR not in response.text
     assert "UPDATE requests" not in response.text
 
-    # The provider was called before audit finalization failed.
+    # Inference occurred before audit finalization failed.
     provider.generate.assert_awaited_once()
 
-    # The gateway acquired a lease.
-    acquire.assert_called_once()
+    # Request creation and initial lease assignment
+    # are now performed by the same operation.
+    starter.assert_called_once()
+    assert (
+        starter.call_args.kwargs["lease_seconds"]
+        == 60
+    )
+    assert (
+        starter.call_args.kwargs["worker_id"]
+        .startswith("aegis-worker-")
+    )
 
-    # Finalization was attempted.
+    # Finalization was attempted but its failure
+    # prevented the generated output from reaching
+    # the client.
     finish.assert_called_once()
     assert finish.call_args.kwargs["outcome"] == "completed"
 
-    # Verify that the token was attached to the request.
     finalized_request = finish.call_args.kwargs["request"]
-    assert finalized_request.lease_token == "test-audit-lease-token"
+
+    assert (
+        finalized_request.lease_token
+        == "test-audit-lease-token"
+    )
     assert finalized_request.request_id == persisted.request_id
 
-    # Pending audit was committed before inference.
+    # One commit makes the request and lease durable
+    # before inference begins.
     db.commit.assert_called_once()
+    db.rollback.assert_not_called()
 
 
 # ==========================================================
@@ -221,23 +251,14 @@ def test_unexpected_finalization_error_returns_safe_503(
 
     db = MagicMock()
     session_id = uuid4()
-
-    # Real PersistedRequest required for lease attachment.
-    persisted = PersistedRequest(
-        request_id=uuid4(),
-        tenant_id=uuid4(),
-        agent_id=uuid4(),
-        session_id=session_id,
-        public_request_id="REQ-test123",
-    )
+    persisted = make_persisted_request(session_id)
 
     def manage_session(*, identity, db, requested_session_id):
-        return ManagedSession(
-            identity=identity.model_copy(
-                update={"session_id": str(session_id)}
-            ),
+        return manage_test_session(
+            identity=identity,
+            db=db,
+            requested_session_id=requested_session_id,
             session_id=session_id,
-            created=True,
         )
 
     with (
@@ -251,36 +272,27 @@ def test_unexpected_finalization_error_returns_safe_503(
         ),
         patch(
             "app.gateway.postgres_orchestrator."
-            "start_request",
+            "start_leased_request",
             return_value=persisted,
-        ),
-        patch(
-            "app.gateway.postgres_orchestrator."
-            "acquire_request_lease",
-            return_value="test-audit-lease-token",
-        ) as acquire,
+        ) as starter,
         patch(
             "app.gateway.postgres_orchestrator."
             "finish_request",
-            side_effect=RuntimeError(SECRET_DATABASE_ERROR),
+            side_effect=RuntimeError(
+                SECRET_DATABASE_ERROR
+            ),
         ) as finish,
         patch(
             "app.gateway.postgres_orchestrator."
             "inspect_response",
-        ) as inspector,
+            return_value=ResponseInspection(
+                action=ResponseAction.ALLOW,
+                content=SECRET_RESPONSE,
+                reason="Safe response.",
+            ),
+        ),
     ):
         session_local.return_value.__enter__.return_value = db
-
-        from app.security.llm_response_inspector import (
-            ResponseAction,
-            ResponseInspection,
-        )
-
-        inspector.return_value = ResponseInspection(
-            action=ResponseAction.ALLOW,
-            content=SECRET_RESPONSE,
-            reason="Safe response.",
-        )
 
         response = send_request(client)
 
@@ -295,13 +307,17 @@ def test_unexpected_finalization_error_returns_safe_503(
     assert SECRET_DATABASE_ERROR not in response.text
 
     provider.generate.assert_awaited_once()
-    acquire.assert_called_once()
-    finish.assert_called_once()
 
+    starter.assert_called_once()
+    assert starter.call_args.kwargs["lease_seconds"] == 60
+
+    finish.assert_called_once()
     assert finish.call_args.kwargs["outcome"] == "completed"
+
     assert (
         finish.call_args.kwargs["request"].lease_token
         == "test-audit-lease-token"
     )
 
     db.commit.assert_called_once()
+    db.rollback.assert_not_called()
