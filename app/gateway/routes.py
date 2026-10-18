@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -254,6 +255,69 @@ def _blocked_response_exception(
 
 
 # ==================================================
+# POSTGRESQL CLIENT DISCONNECT HANDLING
+# ==================================================
+
+async def _wait_for_client_disconnect(http_request: Request) -> None:
+    """Listen for ASGI disconnect after FastAPI has read the request body."""
+    while True:
+        message = await http_request.receive()
+        if message["type"] == "http.disconnect":
+            return
+
+
+async def _run_postgres_until_disconnect(
+    *,
+    http_request: Request,
+    model_request: ModelRequest,
+    provider_router: ProviderRouterProtocol,
+    requested_session_id: str | None,
+) -> Any:
+    """Cancel unnecessary inference if its HTTP client disconnects.
+
+    A synchronous DB operation already started via asyncio.to_thread()
+    may still finish after coroutine cancellation. Unfinished committed
+    leases are handled by the existing PostgreSQL recovery worker.
+    """
+    inference_task = asyncio.create_task(
+        generate_postgres_response(
+            model_request=model_request,
+            provider_router=provider_router,
+            session_factory=SessionLocal,
+            requested_session_id=requested_session_id,
+        )
+    )
+    disconnect_task = asyncio.create_task(
+        _wait_for_client_disconnect(http_request)
+    )
+
+    try:
+        done, _ = await asyncio.wait(
+            {inference_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # Prefer an already completed inference, including its exception.
+        if inference_task in done:
+            return await inference_task
+
+        # Do not return model output to a disconnected client.
+        inference_task.cancel()
+        await asyncio.gather(inference_task, return_exceptions=True)
+        raise asyncio.CancelledError()
+
+    finally:
+        disconnect_task.cancel()
+        if not inference_task.done():
+            inference_task.cancel()
+        await asyncio.gather(
+            disconnect_task,
+            inference_task,
+            return_exceptions=True,
+        )
+
+
+# ==================================================
 # AUTHENTICATED MODEL GENERATION
 # ==================================================
 
@@ -330,10 +394,10 @@ async def generate_model(
         try:
             # Only open a database session when PostgreSQL
             # runtime is explicitly enabled.
-            result = await generate_postgres_response(
+            result = await _run_postgres_until_disconnect(
+                http_request=http_request,
                 model_request=model_request,
                 provider_router=provider_router,
-                session_factory=SessionLocal,
                 requested_session_id=requested_session_id,
             )
 
