@@ -17,7 +17,6 @@ jobs:
   python-tests:
     name: Python Unit Tests
     runs-on: ubuntu-latest
-
     timeout-minutes: 15
 
     steps:
@@ -40,9 +39,81 @@ jobs:
             -r requirements.txt \
             -r requirements-db.txt
 
-      - name: Run Python tests
+      - name: Run Python unit tests
         env:
           RUN_POSTGRES_INTEGRATION: "0"
           AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
+        run: |
+          python -m pytest -q --tb=short
+
+  postgres-integration:
+    name: PostgreSQL Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: aegistwin
+          POSTGRES_PASSWORD: ci-test-only-password
+          POSTGRES_DB: aegistwin_test_db
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U aegistwin -d aegistwin_test_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: "127.0.0.1"
+      DB_PORT: "55433"
+      DB_USER: "aegistwin"
+      DB_PASSWORD: "ci-test-only-password"
+      DB_NAME: "aegistwin_test_db"
+      RUN_POSTGRES_INTEGRATION: "1"
+      AEGISTWIN_POSTGRES_RUNTIME_ENABLED: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-db.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-db.txt
+
+      - name: Verify isolated test database
+        run: |
+          python - <<'PY'
+          import os
+          from app.infrastructure.database import DATABASE_URL, check_database
+
+          assert os.environ["DB_NAME"] == "aegistwin_test_db"
+          assert DATABASE_URL.database == "aegistwin_test_db"
+          assert DATABASE_URL.host == "127.0.0.1"
+          assert DATABASE_URL.port == 55433
+          assert check_database(), "Test database connection failed"
+
+          print("Isolated CI PostgreSQL connection verified.")
+          PY
+
+      - name: Apply Alembic migrations
+        run: |
+          python -m alembic upgrade head
+
+      - name: Run PostgreSQL integration tests
         run: |
           python -m pytest -q --tb=short
