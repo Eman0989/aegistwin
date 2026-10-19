@@ -131,3 +131,34 @@ async def test_openai_invalid_credentials():
 
         assert error.value.code == "invalid_credentials"
         assert error.value.retryable is False
+
+def test_ollama_uses_local_default(monkeypatch):
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+
+    provider = OllamaProvider()
+
+    assert provider.base_url == "http://127.0.0.1:11434"
+
+
+def test_ollama_uses_environment_url(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_BASE_URL",
+        "http://host.docker.internal:11434/",
+    )
+
+    provider = OllamaProvider()
+
+    assert provider.base_url == "http://host.docker.internal:11434"
+
+
+def test_explicit_ollama_url_overrides_environment(monkeypatch):
+    monkeypatch.setenv(
+        "OLLAMA_BASE_URL",
+        "http://host.docker.internal:11434",
+    )
+
+    provider = OllamaProvider(
+        base_url="http://127.0.0.1:11434"
+    )
+
+    assert provider.base_url == "http://127.0.0.1:11434"

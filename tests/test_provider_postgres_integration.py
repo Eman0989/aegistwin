@@ -17,6 +17,10 @@ RUN_INTEGRATION = (
     os.getenv("RUN_POSTGRES_INTEGRATION") == "1"
 )
 
+RUN_LIVE_OLLAMA = (
+    os.getenv("RUN_LIVE_OLLAMA_TESTS") == "1"
+)
+
 pytestmark = pytest.mark.skipif(
     not RUN_INTEGRATION,
     reason=(
@@ -58,7 +62,7 @@ def verify_test_database():
             "Integration tests require a local database."
         )
 
-    if DATABASE_URL.port != 55432:
+    if DATABASE_URL.port not in (55432, 55433):
         raise RuntimeError(
             "Unexpected database port."
         )
@@ -141,7 +145,6 @@ def test_request():
         )
 
         # STEP 4: Return both identifiers.
-        # Vishnu's updated API requires tenant_id.
         yield {
             "request_id": request_id,
             "tenant_id": tenant_id,
@@ -198,11 +201,27 @@ def test_request():
 # 4. TEST REAL OLLAMA + POSTGRESQL
 # ==================================================
 
+@pytest.mark.skipif(
+    not RUN_LIVE_OLLAMA,
+    reason=(
+        "Live Ollama test disabled. "
+        "Set RUN_LIVE_OLLAMA_TESTS=1 to enable."
+    ),
+)
 @pytest.mark.asyncio
 async def test_real_ollama_request(test_request):
     """
     Send a real request through ProviderRouter
     and verify PostgreSQL records the result.
+
+    This test requires:
+    - An isolated PostgreSQL test database.
+    - RUN_POSTGRES_INTEGRATION=1.
+    - RUN_LIVE_OLLAMA_TESTS=1.
+    - A running local Ollama server.
+    - The llama3.2:3b model installed.
+
+    It is skipped in normal GitHub CI.
     """
 
     from app.infrastructure.persistence import (

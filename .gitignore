@@ -25,3 +25,9 @@ data/*.db-wal
 
 # Docker database secrets
 .env.docker
+
+!.env.docker.example
+
+# Database backups
+backups/
+*.dump

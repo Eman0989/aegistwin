@@ -1,0 +1,31 @@
+
+.git
+.gitignore
+.venv
+__pycache__
+.pytest_cache
+*.pyc
+
+# Environment files and secrets
+.env
+.env.*
+!.env.docker.example
+
+# Local databases and runtime files
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Development files
+tests/
+frontend/
+evidence/
+benchmarks/
+scripts/
+
+# Generated files
+dist/
+build/
+*.log
+.DS_Store

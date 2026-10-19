@@ -1,5 +1,6 @@
 
 import json
+import os
 import httpx
 
 from collections.abc import AsyncIterator
@@ -16,12 +17,23 @@ class OllamaProvider(LLMProvider):
     def __init__(
         self,
         model: str = "llama3.2:3b",
-        base_url: str = "http://127.0.0.1:11434",
+        base_url: str | None = None,
     ):
         self.model = model
-        self.base_url = base_url.rstrip("/")
 
-        # Reuse the existing Ollama agent
+        # An explicit URL takes precedence over the environment.
+        # Local development works without additional configuration.
+        # Docker can use OLLAMA_BASE_URL to reach the host machine.
+        self.base_url = (
+            base_url
+            if base_url is not None
+            else os.getenv(
+                "OLLAMA_BASE_URL",
+                "http://127.0.0.1:11434",
+            )
+        ).rstrip("/")
+
+        # Reuse the existing Ollama agent.
         self.agent = OllamaBenchmarkAgent(
             model=self.model,
             base_url=self.base_url,
