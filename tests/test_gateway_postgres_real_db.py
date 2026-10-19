@@ -588,3 +588,86 @@ def test_http_provider_failure_is_audited(
         )
 
         assert audits[0].completed_at is not None
+
+# ==================================================
+# 7. REAL OLLAMA + HTTP + POSTGRESQL END-TO-END TEST
+# ==================================================
+
+@pytest.mark.skipif(
+    os.getenv("RUN_LIVE_OLLAMA_TESTS") != "1",
+    reason="Live Ollama testing is disabled.",
+)
+def test_real_ollama_request_is_persisted(records):
+    """Verify real LLM inference through HTTP and PostgreSQL."""
+
+    from app.infrastructure.database import SessionLocal
+    from app.infrastructure.models import AgentRequest, AgentSession
+
+    # Never run this test against the application database.
+    verify_test_database()
+
+    # Use the real commercial provider adapter, not a mock.
+    assert get_provider_router not in app.dependency_overrides
+
+    with TestClient(app) as client:
+        response = client.post(
+            API_PATH,
+            headers=headers(),
+            json={
+                "provider": "ollama",
+                "model": "llama3.2:3b",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Reply briefly with: "
+                            "AegisTwin integration successful"
+                        ),
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+
+    payload = response.json()
+
+    assert payload["content"].strip()
+    assert payload["provider"] == "ollama"
+    assert payload["model"] == "llama3.2:3b"
+
+    session_id = UUID(
+        response.headers["X-Aegis-Session-ID"]
+    )
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+
+        assert session is not None
+        assert session.tenant_id == records["tenant_a"]
+        assert session.agent_id == records["agent_a"]
+
+        audits = db.execute(
+            select(AgentRequest).where(
+                AgentRequest.tenant_id == records["tenant_a"],
+                AgentRequest.session_id == session_id,
+            )
+        ).scalars().all()
+
+        assert len(audits) == 1
+
+        audit = audits[0]
+
+        assert audit.status == "completed"
+        assert audit.completed_at is not None
+        assert audit.provider == "ollama"
+        assert audit.model == "llama3.2:3b"
+        assert audit.agent_id == records["agent_a"]
+        assert audit.input_tokens is not None
+        assert audit.input_tokens > 0
+        assert audit.output_tokens is not None
+        assert audit.output_tokens > 0
+
+    print("Real Ollama inference: SUCCESS")
+    print("Authenticated gateway: SUCCESS")
+    print("PostgreSQL audit: SUCCESS")
