@@ -31,6 +31,10 @@ from app.providers.commercial_adapter import (
 from app.providers.errors import (
     ProviderError as RuntimeProviderError,
 )
+from app.security.llm_response_inspector import (
+    ResponseAction,
+    inspect_response,
+)
 
 
 router = APIRouter(
@@ -91,10 +95,13 @@ class ProviderRouterProtocol(Protocol):
         ...
 
 
-commercial_provider_adapter = CommercialProviderAdapter()
+commercial_provider_adapter = (
+    CommercialProviderAdapter()
+)
 
 
-def get_provider_router() -> ProviderRouterProtocol:
+def get_provider_router(
+) -> ProviderRouterProtocol:
     """Return the configured commercial provider adapter."""
 
     return commercial_provider_adapter
@@ -112,18 +119,28 @@ def _provider_error_status(
         "streaming_not_supported",
         "model_not_found",
     }:
-        return status.HTTP_400_BAD_REQUEST
+        return (
+            status.HTTP_400_BAD_REQUEST
+        )
 
     if error.code == "rate_limited":
-        return status.HTTP_429_TOO_MANY_REQUESTS
+        return (
+            status.HTTP_429_TOO_MANY_REQUESTS
+        )
 
     if error.code == "provider_timeout":
-        return status.HTTP_504_GATEWAY_TIMEOUT
+        return (
+            status.HTTP_504_GATEWAY_TIMEOUT
+        )
 
     if error.code == "provider_unavailable":
-        return status.HTTP_503_SERVICE_UNAVAILABLE
+        return (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+        )
 
-    return status.HTTP_502_BAD_GATEWAY
+    return (
+        status.HTTP_502_BAD_GATEWAY
+    )
 
 
 # ==================================================
@@ -166,7 +183,9 @@ DEFAULT_PROVIDER_ERROR_MESSAGE = (
 )
 
 
-def _safe_provider_error_code(code: str) -> str:
+def _safe_provider_error_code(
+    code: str,
+) -> str:
     """Do not expose unknown provider-defined error codes."""
 
     if code in SAFE_PROVIDER_ERROR_MESSAGES:
@@ -194,7 +213,9 @@ async def generate_model(
 ) -> ModelResponse:
     """Send one authenticated model request through AegisTwin."""
 
-    request_id = f"REQ-{uuid4().hex[:12]}"
+    request_id = (
+        f"REQ-{uuid4().hex[:12]}"
+    )
 
     model_request = ModelRequest(
         request_id=request_id,
@@ -207,6 +228,10 @@ async def generate_model(
         metadata=request.metadata,
     )
 
+    # ==============================================
+    # PROVIDER INFERENCE
+    # ==============================================
+
     try:
         response = await provider_router.generate(
             model_request
@@ -215,17 +240,25 @@ async def generate_model(
     except RuntimeProviderError as exc:
         # Never return str(exc): a provider exception
         # could contain an API key or other secret.
-        public_code = _safe_provider_error_code(
-            exc.code
+        public_code = (
+            _safe_provider_error_code(
+                exc.code
+            )
         )
 
         raise HTTPException(
-            status_code=_provider_error_status(exc),
+            status_code=(
+                _provider_error_status(
+                    exc
+                )
+            ),
             detail={
                 "code": public_code,
-                "message": SAFE_PROVIDER_ERROR_MESSAGES.get(
-                    public_code,
-                    DEFAULT_PROVIDER_ERROR_MESSAGE,
+                "message": (
+                    SAFE_PROVIDER_ERROR_MESSAGES.get(
+                        public_code,
+                        DEFAULT_PROVIDER_ERROR_MESSAGE,
+                    )
                 ),
                 "retryable": exc.retryable,
                 "request_id": request_id,
@@ -237,13 +270,102 @@ async def generate_model(
 
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=(
+                status.HTTP_502_BAD_GATEWAY
+            ),
             detail={
                 "code": "provider_error",
-                "message": DEFAULT_PROVIDER_ERROR_MESSAGE,
+                "message": (
+                    DEFAULT_PROVIDER_ERROR_MESSAGE
+                ),
                 "retryable": False,
                 "request_id": request_id,
             },
         ) from exc
+
+    # ==============================================
+    # POST-LLM RESPONSE SECURITY INSPECTION
+    # ==============================================
+
+    inspection = inspect_response(
+        response.content
+    )
+
+    # ----------------------------------------------
+    # BLOCK
+    # ----------------------------------------------
+    #
+    # Unsafe content is never returned to the caller.
+    # The provider response remains internal.
+    #
+    if (
+        inspection.action
+        == ResponseAction.BLOCK
+    ):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_403_FORBIDDEN
+            ),
+            detail={
+                "code": "response_blocked",
+                "message": (
+                    "The model response was blocked "
+                    "by AegisTwin security policy."
+                ),
+                "request_id": request_id,
+            },
+        )
+
+    # ----------------------------------------------
+    # REDACT
+    # ----------------------------------------------
+    #
+    # Only the response content changes.
+    #
+    # These remain untouched:
+    # - request_id
+    # - provider
+    # - model
+    # - tool_calls
+    # - usage
+    # - finish_reason
+    # - latency
+    #
+    if (
+        inspection.action
+        == ResponseAction.REDACT
+    ):
+        # Defensive fail-closed check.
+        # A REDACT decision must always contain
+        # valid sanitized text.
+        if inspection.content is None:
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_403_FORBIDDEN
+                ),
+                detail={
+                    "code": "response_blocked",
+                    "message": (
+                        "The model response was blocked "
+                        "by AegisTwin security policy."
+                    ),
+                    "request_id": request_id,
+                },
+            )
+
+        response = response.model_copy(
+            update={
+                "content": (
+                    inspection.content
+                )
+            }
+        )
+
+    # ----------------------------------------------
+    # ALLOW
+    # ----------------------------------------------
+    #
+    # No transformation is necessary.
+    #
 
     return response
